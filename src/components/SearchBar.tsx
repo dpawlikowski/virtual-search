@@ -61,7 +61,6 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         aria-label="Search items"
-        aria-owns="vs-search-listbox"
         autoComplete="off"
         spellCheck={false}
       />

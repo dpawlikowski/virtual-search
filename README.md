@@ -182,7 +182,6 @@ The worker uses it automatically. Without it, the worker falls back to a charact
 interface UseSearchableListOptions<T extends VirtualItem> {
   // Required
   items: T[]
-  containerHeight: number
 
   // Search
   searchFields?: Array<keyof T & string>    // default: ['text']
@@ -190,6 +189,7 @@ interface UseSearchableListOptions<T extends VirtualItem> {
   serverSearchDebounce?: number             // default: 250ms
 
   // Height estimation
+  containerHeight?: number                  // informational — set this same value on the container via CSS
   serverHintMinSamples?: number             // default: 10
   onMeasureReport?: (id: string, height: number, bucket: ViewportBucket) => void
   defaultItemHeight?: number                // default: 150px
@@ -348,11 +348,11 @@ The MiniSearch index is built once and only *added to* as new items arrive (e.g.
 ```bash
 npm install
 npm run dev       # demo at http://localhost:5173
-npm test          # vitest — 83 tests
+npm test          # vitest — 130 tests
 npm run typecheck
 ```
 
-For architecture details and contribution guidelines, see [CLAUDE.md](./CLAUDE.md) — it documents the measurement model, the 4-layer height cascade, and the rules to follow when changing the measurement or search logic.
+For architecture details and contribution guidelines, see [CONTRIBUTING.md](./CONTRIBUTING.md) — it documents the measurement model, the 4-layer height cascade, and the rules to follow when changing the measurement or search logic.
 
 ---
 

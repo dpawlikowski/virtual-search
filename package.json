@@ -50,6 +50,14 @@
     "vite": "^5.4.0",
     "vitest": "^2.1.9"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dpawlikowski/virtual-search"
+  },
+  "homepage": "https://github.com/dpawlikowski/virtual-search#readme",
+  "bugs": {
+    "url": "https://github.com/dpawlikowski/virtual-search/issues"
+  },
   "keywords": [
     "react",
     "virtualization",

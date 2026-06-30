@@ -1,6 +1,6 @@
-# CLAUDE.md — virtual-search
+# CONTRIBUTING — virtual-search
 
-Specyfikacja ogólna projektu dla pracy z Claude Code / agentami AI. Czytaj ten plik zanim zaczniesz edytować kod.
+Specyfikacja ogólna projektu. Czytaj ten plik zanim zaczniesz edytować kod.
 
 ---
 
@@ -154,7 +154,7 @@ interface VirtualItem {
 ```bash
 npm install              # instalacja (użyj --legacy-peer-deps jeśli konflikt)
 npm run dev              # demo na localhost:5173
-npm test                 # 83 testy (vitest)
+npm test                 # 130 testów (vitest)
 npm run typecheck        # tsc --noEmit
 npm run build:lib        # build biblioteki do dist/
 ```

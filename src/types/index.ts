@@ -51,7 +51,8 @@ export interface FontConfig {
 
 export interface UseSearchableListOptions<T extends VirtualItem> {
   items: T[]
-  containerHeight: number
+  /** Height of the scroll container in px. Set this same value on the container element via CSS/style. */
+  containerHeight?: number
   searchFields?: Array<keyof T & string>
   onServerSearch?: (query: string) => Promise<T[]>
   serverSearchDebounce?: number
