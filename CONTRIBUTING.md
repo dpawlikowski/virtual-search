@@ -161,7 +161,7 @@ npm run build:lib        # build biblioteki do dist/
 
 ---
 
-## Zasady przy edycji kodu (dla agentów)
+## Zasady przy edycji kodu
 
 1. **Po każdej zmianie:** `npm run typecheck && npm test` — musi być zielone (83 testy, zero błędów TS)
 2. **Nie dodawaj ResizeObservera** do pomiaru itemów — TanStack to robi
