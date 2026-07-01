@@ -317,3 +317,44 @@ describe('SearchBar — search options', () => {
     expect(screen.getByRole('button', { name: 'Whole word' })).not.toBeDisabled()
   })
 })
+
+describe('SearchBar — labels override (i18n)', () => {
+  it('overrides the search input aria-label', () => {
+    render(
+      <SearchBar
+        search={search()}
+        onQueryChange={vi.fn()}
+        onNext={vi.fn()}
+        onPrev={vi.fn()}
+        labels={{ searchInputAriaLabel: 'Szukaj elementów' }}
+      />
+    )
+    expect(screen.getByLabelText('Szukaj elementów')).toBeInTheDocument()
+  })
+
+  it('overrides the no-results text', () => {
+    render(
+      <SearchBar
+        search={search({ query: 'xyz', matches: [] })}
+        onQueryChange={vi.fn()}
+        onNext={vi.fn()}
+        onPrev={vi.fn()}
+        labels={{ noResults: 'Brak wyników' }}
+      />
+    )
+    expect(screen.getByText('Brak wyników')).toBeInTheDocument()
+  })
+
+  it('leaves unspecified labels at their English default', () => {
+    render(
+      <SearchBar
+        search={search()}
+        onQueryChange={vi.fn()}
+        onNext={vi.fn()}
+        onPrev={vi.fn()}
+        labels={{ searchInputAriaLabel: 'Custom' }}
+      />
+    )
+    expect(screen.getByLabelText('Previous match')).toBeInTheDocument()
+  })
+})

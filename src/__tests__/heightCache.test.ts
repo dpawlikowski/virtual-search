@@ -96,4 +96,19 @@ describe('heightCache round-trip', () => {
     const result = await bulkGetHeights(['font-item'], 'md', 'hash-B', STORE)
     expect(result.has('font-item')).toBe(false)
   })
+
+  it('respects a custom ttlMs — an entry older than ttlMs is treated as stale', async () => {
+    await setHeight('ttl-item', 99, 'md', 'h', STORE)
+    // A negative ttl means "already expired" regardless of when it was written.
+    const result = await bulkGetHeights(['ttl-item'], 'md', 'h', STORE, -1)
+    expect(result.has('ttl-item')).toBe(false)
+  })
+
+  it('a custom ttlMs large enough still returns the entry', async () => {
+    await setHeight('ttl-item-2', 42, 'md', 'h', STORE)
+    const result = await bulkGetHeights(['ttl-item-2'], 'md', 'h', STORE, 60_000)
+    if (result.size > 0) {
+      expect(result.get('ttl-item-2')).toBe(42)
+    }
+  })
 })

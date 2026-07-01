@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { renderHook, act, waitFor } from '@testing-library/react'
+import { renderHook, render, act, waitFor } from '@testing-library/react'
 import { useSearchableList } from '../hooks/useSearchableList'
 import type { VirtualItem } from '../types'
 
@@ -131,6 +131,40 @@ describe('useSearchableList — items merge with onServerSearch', () => {
     await waitFor(() => expect(onServerSearch).toHaveBeenCalledWith('lazy'))
     await waitFor(() => expect(result.current.items.some(i => i.id === '6')).toBe(true))
     expect(result.current.items.filter(i => i.id === '1')).toHaveLength(1)
+  })
+
+  it('clears merged server results when the query is cleared', async () => {
+    const onServerSearch = vi.fn(async () => [
+      { id: '6', text: 'Server-only result about lazy evaluation' },
+    ])
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(result.current.items.some(i => i.id === '6')).toBe(true))
+    act(() => result.current.setQuery(''))
+    expect(result.current.items.some(i => i.id === '6')).toBe(false)
+  })
+
+  it('calls onSearchError when onServerSearch rejects, without throwing', async () => {
+    const onSearchError = vi.fn()
+    const onServerSearch = vi.fn(async () => { throw new Error('boom') })
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, onSearchError, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(onSearchError).toHaveBeenCalledWith(expect.any(Error)))
+  })
+})
+
+describe('useSearchableList — containerHeight', () => {
+  it('applies containerHeight to the container element style', () => {
+    function TestComponent() {
+      const { containerRef } = useSearchableList({ items, containerHeight: 600 })
+      return <div ref={containerRef} data-testid="container" />
+    }
+    const { getByTestId } = render(<TestComponent />)
+    expect(getByTestId('container').style.height).toBe('600px')
   })
 })
 

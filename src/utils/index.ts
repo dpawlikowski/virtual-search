@@ -5,6 +5,12 @@ export const EMA_WARMUP_SAMPLES = 10
 export const EMA_READY_THRESHOLD = 3
 export const EMA_DEFAULT_FALLBACK = 150
 
+/** True unless a bundler/runtime explicitly set NODE_ENV to 'production'. No @types/node dependency required. */
+export function isDevEnvironment(): boolean {
+  const proc = (globalThis as { process?: { env?: { NODE_ENV?: string } } }).process
+  return proc?.env?.NODE_ENV !== 'production'
+}
+
 export function getViewportBucket(width: number): ViewportBucket {
   if (width < 480) return 'xs'
   if (width < 768) return 'sm'

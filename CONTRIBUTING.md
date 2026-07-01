@@ -75,7 +75,7 @@ src/
 demo/
   App.tsx                   # demo: 5000 emaili, Ctrl+F toggle
   main.tsx, demo.css
-src/__tests__/              # 83 testy (vitest + @testing-library)
+src/__tests__/              # 213 testów (vitest + @testing-library)
 ```
 
 ---

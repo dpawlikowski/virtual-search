@@ -69,15 +69,21 @@ export interface FontConfig {
 
 export interface UseSearchableListOptions<T extends VirtualItem> {
   items: T[]
-  /** Height of the scroll container in px. Set this same value on the container element via CSS/style. */
+  /** Height of the scroll container in px. Applied to the container element's `style.height` — set it here instead of duplicating it in your own CSS/style. */
   containerHeight?: number
   searchFields?: Array<keyof T & string>
   onServerSearch?: (query: string) => Promise<T[]>
   serverSearchDebounce?: number
+  /** Called when `onServerSearch` rejects, so the host app can surface an error (e.g. a toast). Non-fatal — local search keeps working. */
+  onSearchError?: (error: unknown) => void
   serverHintMinSamples?: number
   onMeasureReport?: (itemId: string, height: number, bucket: ViewportBucket) => void
   cacheStoreName?: string
   defaultItemHeight?: number
+  /** How long a cached height stays valid before being treated as stale. Default: 30 days. */
+  cacheTtlMs?: number
+  /** Alignment used when scrolling to a match (`nextMatch`/`prevMatch`/`goToMatch`). Default: 'center'. */
+  scrollAlign?: 'start' | 'center' | 'end' | 'auto'
 
   // Tuning — sensible defaults, override only if profiling shows a need to.
   /** Debounce before a measured height is written to IndexedDB. Default: 500ms. */

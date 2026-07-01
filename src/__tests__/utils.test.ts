@@ -1,6 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { getViewportBucket, parseFontForPretext, hashFontConfig, EMA } from '../utils'
+import { getViewportBucket, parseFontForPretext, hashFontConfig, EMA, isDevEnvironment } from '../utils'
 import { resolveRanges } from '../search/miniSearchAdapter'
+
+describe('isDevEnvironment', () => {
+  it('returns true when process is undefined (browser bundle without NODE_ENV inlined)', () => {
+    expect(isDevEnvironment()).toBe(true)
+  })
+
+  it('returns false when process.env.NODE_ENV is "production"', () => {
+    const g = globalThis as { process?: { env?: { NODE_ENV?: string } } }
+    const original = g.process
+    g.process = { env: { NODE_ENV: 'production' } }
+    try {
+      expect(isDevEnvironment()).toBe(false)
+    } finally {
+      g.process = original
+    }
+  })
+})
 
 describe('getViewportBucket', () => {
   it('maps widths to correct buckets', () => {

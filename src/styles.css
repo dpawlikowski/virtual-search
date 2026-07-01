@@ -170,6 +170,18 @@
   box-sizing: border-box;
 }
 
+/* The visual track is only --vs-scrollbar-width (10px default) wide — below
+   the 24px WCAG/Apple HIG minimum touch target. Widen the hit area with an
+   invisible ::before rather than growing the visible track. */
+.vs-minimap::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: max(24px, var(--vs-scrollbar-width, 10px));
+}
+
 @media (prefers-color-scheme: dark) {
   .vs-minimap {
     background: var(--vs-minimap-track-bg, rgba(148, 163, 184, 0.12));

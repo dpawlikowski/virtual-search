@@ -1,6 +1,36 @@
 import React, { useCallback, useRef, type RefObject } from 'react'
 import type { SearchState, SearchOptions } from '../types'
 
+export interface SearchBarLabels {
+  searchInputAriaLabel?: string
+  noResults?: string
+  optionsGroupAriaLabel?: string
+  regex?: string
+  exactMatch?: string
+  wholeWord?: string
+  wholeWordDisabledHint?: string
+  caseSensitive?: string
+  caseSensitiveDisabledHint?: string
+  previousMatch?: string
+  nextMatch?: string
+  clearSearch?: string
+}
+
+const DEFAULT_LABELS: Required<SearchBarLabels> = {
+  searchInputAriaLabel: 'Search items',
+  noResults: 'No results',
+  optionsGroupAriaLabel: 'Search options',
+  regex: 'Regex',
+  exactMatch: 'Exact match',
+  wholeWord: 'Whole word',
+  wholeWordDisabledHint: 'Whole word (ignored in Regex mode — use \\b yourself)',
+  caseSensitive: 'Case sensitive',
+  caseSensitiveDisabledHint: 'Case sensitive (enable Regex or Exact match first — fuzzy search is always case-insensitive)',
+  previousMatch: 'Previous match',
+  nextMatch: 'Next match',
+  clearSearch: 'Clear search',
+}
+
 interface SearchBarProps {
   search: SearchState
   onQueryChange: (q: string) => void
@@ -20,6 +50,8 @@ interface SearchBarProps {
    * (e.g. to hide the search bar). If omitted, Escape only clears + blurs.
    */
   onEscape?: () => void
+  /** Override any of the built-in English strings/aria-labels, e.g. for localization. */
+  labels?: SearchBarLabels
 }
 
 export const SearchBar: React.FC<SearchBarProps> = ({
@@ -32,9 +64,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   placeholder = 'Search…',
   inputRef: externalRef,
   onEscape,
+  labels: labelsOverride,
 }) => {
   const internalRef = useRef<HTMLInputElement>(null)
   const inputRef = externalRef ?? internalRef
+  const labels = labelsOverride ? { ...DEFAULT_LABELS, ...labelsOverride } : DEFAULT_LABELS
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -64,20 +98,20 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         onChange={(e) => onQueryChange(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
-        aria-label="Search items"
+        aria-label={labels.searchInputAriaLabel}
         autoComplete="off"
         spellCheck={false}
       />
 
       {onOptionsChange && (
-        <span className="vs-search-options" role="group" aria-label="Search options">
+        <span className="vs-search-options" role="group" aria-label={labels.optionsGroupAriaLabel}>
           <button
             type="button"
             className={`vs-search-opt ${search.options.regex ? 'vs-search-opt-active' : ''}`}
             onClick={() => onOptionsChange({ regex: !search.options.regex, exactMatch: false })}
             aria-pressed={!!search.options.regex}
             aria-label="Use regular expression"
-            title="Regex"
+            title={labels.regex}
           >
             .*
           </button>
@@ -86,8 +120,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             className={`vs-search-opt ${search.options.exactMatch ? 'vs-search-opt-active' : ''}`}
             onClick={() => onOptionsChange({ exactMatch: !search.options.exactMatch, regex: false })}
             aria-pressed={!!search.options.exactMatch}
-            aria-label="Exact match"
-            title="Exact match"
+            aria-label={labels.exactMatch}
+            title={labels.exactMatch}
           >
             " "
           </button>
@@ -97,8 +131,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             onClick={() => onOptionsChange({ wholeWord: !search.options.wholeWord })}
             disabled={!!search.options.regex}
             aria-pressed={!!search.options.wholeWord}
-            aria-label="Whole word"
-            title={search.options.regex ? 'Whole word (ignored in Regex mode — use \\b yourself)' : 'Whole word'}
+            aria-label={labels.wholeWord}
+            title={search.options.regex ? labels.wholeWordDisabledHint : labels.wholeWord}
           >
             |ab|
           </button>
@@ -108,11 +142,11 @@ export const SearchBar: React.FC<SearchBarProps> = ({
             onClick={() => onOptionsChange({ caseSensitive: !search.options.caseSensitive })}
             disabled={!search.options.regex && !search.options.exactMatch}
             aria-pressed={!!search.options.caseSensitive}
-            aria-label="Case sensitive"
+            aria-label={labels.caseSensitive}
             title={
               search.options.regex || search.options.exactMatch
-                ? 'Case sensitive'
-                : 'Case sensitive (enable Regex or Exact match first — fuzzy search is always case-insensitive)'
+                ? labels.caseSensitive
+                : labels.caseSensitiveDisabledHint
             }
           >
             Aa
@@ -122,7 +156,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
 
       {search.query && (
         <span className="vs-search-count" aria-live="polite" aria-atomic>
-          {search.isSearching ? '…' : count === 0 ? 'No results' : `${active} / ${count}`}
+          {search.isSearching ? '…' : count === 0 ? labels.noResults : `${active} / ${count}`}
         </span>
       )}
 
@@ -130,7 +164,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         className="vs-search-nav"
         onClick={onPrev}
         disabled={count === 0}
-        aria-label="Previous match"
+        aria-label={labels.previousMatch}
         title="Previous (Shift+Enter)"
       >
         ↑
@@ -139,7 +173,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         className="vs-search-nav"
         onClick={onNext}
         disabled={count === 0}
-        aria-label="Next match"
+        aria-label={labels.nextMatch}
         title="Next (Enter)"
       >
         ↓
@@ -149,7 +183,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         <button
           className="vs-search-clear"
           onClick={() => onQueryChange('')}
-          aria-label="Clear search"
+          aria-label={labels.clearSearch}
         >
           ✕
         </button>

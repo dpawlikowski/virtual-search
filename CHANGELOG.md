@@ -2,6 +2,24 @@
 
 All notable changes to `@virtual-search/core` are documented here.
 
+## [Unreleased]
+
+### Added
+
+- `useSearchableList` gained `scrollAlign` (`'start' | 'center' | 'end' | 'auto'`, default `'center'`) applied to `nextMatch`/`prevMatch`/`goToMatch` — previously hardcoded
+- `onSearchError` option — called when `onServerSearch` rejects, so the host app can surface an error (e.g. a toast) instead of the failure being silently swallowed
+- `cacheTtlMs` option — how long a cached height stays valid before `bulkGetHeights`/`evictStaleEntries` treat it as stale (previously a hardcoded 30-day constant, now exported as `DEFAULT_TTL_MS`)
+- `containerHeight` is now actually applied to the container element's `style.height` — previously a purely informational/unused prop, which was a footgun (it looked like it should size the container but silently did nothing)
+- `SearchBar` gained a `labels` prop (`SearchBarLabels`) to override any built-in English string/aria-label for localization
+- Dev-mode warning: `observeItem` now logs a `console.warn` (stripped in production builds) when a rendered item element is missing `data-vs-item-id`, since the failure mode without it (height never persists, navigation misbehaves) was previously silent
+- `MatchMinimap`'s track now has an invisible `::before` hit-slop widening the tap target to at least 24px (WCAG/Apple HIG minimum) without changing the visible track width
+
+### Fixed
+
+- Server-search results (`onServerSearch`) merged into `items` were never cleared when the query was cleared via `setQuery('')` — they lingered until the next non-empty query overwrote them, silently inflating the list
+- `scrollToMatch`'s corrective re-scroll (queued via `requestAnimationFrame` to settle after unmeasured items reflow) could stack multiple pending corrections when `nextMatch`/`prevMatch` fired in quick succession (e.g. holding Enter); the previous frame is now cancelled before queuing a new one
+- The Pretext worker's `preparedCache` grew unboundedly for long-lived sessions with heavy item churn; it's now capped (LRU-ish eviction) at 20,000 entries
+
 ## [0.2.0] — 2026-07-01
 
 ### Added

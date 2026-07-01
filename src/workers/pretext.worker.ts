@@ -23,9 +23,21 @@ const DEFAULT_CONTAINER_WIDTH = 800
 const DEFAULT_LINE_HEIGHT = 24
 const DEFAULT_FONT = '16px Inter'
 
+// Cap so long-lived sessions with heavy item churn (e.g. paginated/replaced
+// data over hours) don't grow this worker-side cache unboundedly.
+const MAX_PREPARED_CACHE_SIZE = 20_000
+
 let pretextModule: PretextModule | null = null
 let pretextChecked = false
 const preparedCache = new Map<string, unknown>()
+
+function cachePrepared(id: string, prepared: unknown): void {
+  preparedCache.set(id, prepared)
+  if (preparedCache.size > MAX_PREPARED_CACHE_SIZE) {
+    const oldestKey = preparedCache.keys().next().value
+    if (oldestKey !== undefined) preparedCache.delete(oldestKey)
+  }
+}
 
 async function ensurePretext(): Promise<boolean> {
   if (pretextChecked) return pretextModule !== null
@@ -86,7 +98,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
           let prepared = preparedCache.get(item.id)
           if (!prepared) {
             prepared = pretextModule.prepare(item.text, font)
-            preparedCache.set(item.id, prepared)
+            cachePrepared(item.id, prepared)
           }
           const { height } = pretextModule.layout(prepared, containerWidth, lineHeight)
           heights.push([item.id, Math.max(lineHeight, height)])

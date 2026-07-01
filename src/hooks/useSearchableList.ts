@@ -18,7 +18,7 @@ import type {
   MatchRange,
   FontConfig,
 } from '../types'
-import { getViewportBucket, parseFontForPretext, hashFontConfig, debounce, EMA } from '../utils'
+import { getViewportBucket, parseFontForPretext, hashFontConfig, debounce, EMA, isDevEnvironment } from '../utils'
 import { bulkGetHeights, setHeight, evictStaleEntries } from '../storage/heightCache'
 import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
 import { WorkerMsg } from '../workers/workerMessages'
@@ -99,13 +99,17 @@ export function useSearchableList<T extends VirtualItem>(
 ): UseSearchableListReturn<T> {
   const {
     items: baseItems,
+    containerHeight,
     searchFields = ['text'],
     onServerSearch,
     serverSearchDebounce = 250,
+    onSearchError,
     serverHintMinSamples = 10,
     onMeasureReport,
     cacheStoreName = 'virtual-search-heights',
     defaultItemHeight = 150,
+    cacheTtlMs,
+    scrollAlign = 'center',
     persistDebounceMs = PERSIST_DEBOUNCE_MS,
     resizeDebounceMs = RESIZE_DEBOUNCE_MS,
     overscan = VIRTUALIZER_OVERSCAN,
@@ -186,8 +190,21 @@ export function useSearchableList<T extends VirtualItem>(
         heightStoreRef.current.set(id, h, 'indexeddb', el.dataset.vsItemType)
         persistHeight(id, h)
       }
+    } else if (isDevEnvironment()) {
+      console.warn(
+        '[virtual-search] observeItem: element is missing data-vs-item-id — its measured height ' +
+        'will not persist to the cache and search navigation to this item may misbehave. ' +
+        'Add data-vs-item-id={item.id} to the item element.'
+      )
     }
   }, [virtualizer, persistHeight])
+
+  // ── Apply containerHeight, if provided ────────────────────────────────────
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || containerHeight == null) return
+    el.style.height = `${containerHeight}px`
+  }, [containerHeight])
 
   // ── Font resolution ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -231,7 +248,7 @@ export function useSearchableList<T extends VirtualItem>(
     if (!container || items.length === 0 || !fc) return
 
     const bucket = getViewportBucket(container.clientWidth)
-    evictStaleEntries(cacheStoreName)
+    evictStaleEntries(cacheStoreName, cacheTtlMs)
 
     ;(async () => {
       for (const item of items) {
@@ -244,7 +261,7 @@ export function useSearchableList<T extends VirtualItem>(
 
       const needIds = items.filter(i => !heightStoreRef.current.has(i.id)).map(i => i.id)
       if (needIds.length > 0) {
-        const cached = await bulkGetHeights(needIds, bucket, fc.hash, cacheStoreName)
+        const cached = await bulkGetHeights(needIds, bucket, fc.hash, cacheStoreName, cacheTtlMs)
         for (const [id, h] of cached) heightStoreRef.current.set(id, h, 'indexeddb')
       }
 
@@ -258,7 +275,7 @@ export function useSearchableList<T extends VirtualItem>(
         })
       }
     })()
-  }, [items, cacheStoreName, serverHintMinSamples])
+  }, [items, cacheStoreName, serverHintMinSamples, cacheTtlMs])
 
   // ── Container resize → Pretext re-layout ─────────────────────────────────
   useEffect(() => {
@@ -298,9 +315,11 @@ export function useSearchableList<T extends VirtualItem>(
       try {
         const results = await onServerSearch(query)
         setServerItems(results)
-      } catch { /* non-fatal */ }
+      } catch (error) {
+        onSearchError?.(error)
+      }
     }, serverSearchDebounce),
-  [onServerSearch, serverSearchDebounce])
+  [onServerSearch, serverSearchDebounce, onSearchError])
 
   // ── setQuery ──────────────────────────────────────────────────────────────
   const runSearch = useCallback((query: string, options: SearchOptions) => {
@@ -321,7 +340,8 @@ export function useSearchableList<T extends VirtualItem>(
   const setQuery = useCallback((query: string) => {
     searchDispatch({ type: 'SET_QUERY', query })
     runSearch(query, searchState.options)
-    debouncedServerSearch(query)
+    if (!query.trim()) setServerItems([])
+    else debouncedServerSearch(query)
   }, [runSearch, searchState.options, debouncedServerSearch])
 
   const setSearchOptions = useCallback((options: Partial<SearchOptions>) => {
@@ -331,17 +351,24 @@ export function useSearchableList<T extends VirtualItem>(
   }, [searchState.options, searchState.query, runSearch])
 
   // ── Navigate matches ──────────────────────────────────────────────────────
+  const correctionRafRef = useRef<number | null>(null)
   const scrollToMatch = useCallback((idx: number) => {
     const match = searchState.matches[idx]
     if (!match) return
-    virtualizer.scrollToIndex(match.index, { align: 'center', behavior: 'auto' })
+    if (correctionRafRef.current !== null) {
+      cancelAnimationFrame(correctionRafRef.current)
+      correctionRafRef.current = null
+    }
+    virtualizer.scrollToIndex(match.index, { align: scrollAlign, behavior: 'auto' })
     // Estimated (unmeasured) item heights can shift the layout once real
     // measurements land, throwing off the first scroll. Re-correct on the
-    // next frame after that reflow has settled.
-    requestAnimationFrame(() => {
-      virtualizer.scrollToIndex(match.index, { align: 'center', behavior: 'auto' })
+    // next frame after that reflow has settled. Cancelled above if another
+    // scrollToMatch fires before this frame runs (e.g. holding Enter).
+    correctionRafRef.current = requestAnimationFrame(() => {
+      correctionRafRef.current = null
+      virtualizer.scrollToIndex(match.index, { align: scrollAlign, behavior: 'auto' })
     })
-  }, [searchState.matches, virtualizer])
+  }, [searchState.matches, virtualizer, scrollAlign])
 
   const nextMatch = useCallback(() => {
     const n = searchState.matches.length

@@ -111,7 +111,7 @@ function DocumentList({ docs }: { docs: Doc[] }) {
 Two attributes are required on each item element:
 - `ref={observeItem}` — wires the element into TanStack's measurement and persists the measured height to the cache
 - `data-index={vi.index}` — TanStack's `measureElement` reads this to know which item it's measuring
-- `data-vs-item-id={item.id}` — identifies the item for the IndexedDB height cache
+- `data-vs-item-id={item.id}` — identifies the item for the IndexedDB height cache. In development builds, `observeItem` logs a `console.warn` if this is missing on a rendered element, since without it the item's height silently never persists and match navigation to it can misbehave.
 
 For best performance, wrap your row in `React.memo` and pass primitives (`translateY`, `index`) rather than the virtual-item object.
 
@@ -185,18 +185,23 @@ interface UseSearchableListOptions<T extends VirtualItem> {
   serverSearchDebounce?: number             // default: 250ms
 
   // Height estimation
-  containerHeight?: number                  // informational — set this same value on the container via CSS
+  containerHeight?: number                  // applied directly to the container's style.height — no need to also set it in your own CSS
   serverHintMinSamples?: number             // default: 10
   onMeasureReport?: (id: string, height: number, bucket: ViewportBucket) => void
   defaultItemHeight?: number                // default: 150px
 
   // Storage
   cacheStoreName?: string                   // default: 'virtual-search-heights'
+  cacheTtlMs?: number                       // default: 30 days — how long a cached height stays valid
+
+  // Errors
+  onSearchError?: (error: unknown) => void  // called when onServerSearch rejects — local search keeps working regardless
 
   // Tuning — sensible defaults, override only if profiling shows a need to
   persistDebounceMs?: number                // default: 500ms — debounce before a measured height is written to IndexedDB
   resizeDebounceMs?: number                 // default: 200ms — debounce before a container resize triggers Pretext re-layout
   overscan?: number                         // default: 4 — extra items rendered outside the viewport, passed to TanStack Virtual
+  scrollAlign?: 'start' | 'center' | 'end' | 'auto'  // default: 'center' — alignment used by nextMatch/prevMatch/goToMatch
 }
 ```
 
@@ -363,6 +368,11 @@ Keyboard: `Enter` → next match, `Shift+Enter` → previous match, `Escape` →
   className=""
   inputRef={inputRef}     // optional — from useSearchToggle, enables auto-focus
   onEscape={() => void}   // optional — called on Escape (e.g. to hide the bar)
+  labels={{                // optional — override any built-in English string/aria-label for localization
+    searchInputAriaLabel: 'Szukaj…',
+    noResults: 'Brak wyników',
+    // ...see SearchBarLabels for the full list; unspecified keys keep their English default
+  }}
 />
 ```
 
@@ -414,7 +424,7 @@ The MiniSearch index is built once and only *added to* as new items arrive (e.g.
 ```bash
 npm install
 npm run dev       # demo at http://localhost:5173
-npm test          # vitest — 205 tests
+npm test          # vitest — 213 tests
 npm run lint
 npm run lint:fix  # auto-fix what ESLint can
 npm run typecheck

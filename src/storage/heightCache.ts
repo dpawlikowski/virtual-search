@@ -3,7 +3,7 @@ import type { ViewportBucket } from '../types'
 
 const DB_NAME = 'virtual-search'
 const DB_VERSION = 1
-const TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
+export const DEFAULT_TTL_MS = 30 * 24 * 60 * 60 * 1000 // 30 days
 
 interface HeightRecord {
   key: string // itemId:bucket:fontHash
@@ -41,7 +41,8 @@ export async function bulkGetHeights(
   itemIds: string[],
   bucket: ViewportBucket,
   fontHash: string,
-  storeName: string
+  storeName: string,
+  ttlMs: number = DEFAULT_TTL_MS
 ): Promise<Map<string, number>> {
   const result = new Map<string, number>()
   try {
@@ -54,7 +55,7 @@ export async function bulkGetHeights(
       itemIds.map(async (id) => {
         const key = buildCacheKey(id, bucket, fontHash)
         const record = await store.get(key) as HeightRecord | undefined
-        if (record && now - record.measuredAt < TTL_MS) {
+        if (record && now - record.measuredAt < ttlMs) {
           result.set(id, record.height)
         }
       })
@@ -86,10 +87,10 @@ export async function setHeight(
   }
 }
 
-export async function evictStaleEntries(storeName: string): Promise<void> {
+export async function evictStaleEntries(storeName: string, ttlMs: number = DEFAULT_TTL_MS): Promise<void> {
   try {
     const database = await getDB(storeName)
-    const cutoff = Date.now() - TTL_MS
+    const cutoff = Date.now() - ttlMs
     const tx = database.transaction(storeName, 'readwrite')
     const index = tx.objectStore(storeName).index('measuredAt')
     const staleKeys = await index.getAllKeys(IDBKeyRange.upperBound(cutoff))
