@@ -1,8 +1,9 @@
 {
   "name": "@virtual-search/core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Virtualized list with hybrid height estimation, full-text search across all data, and scroll-to-match with highlight",
   "type": "module",
+  "author": "Dominik Pawlikowski",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,6 +14,9 @@
     },
     "./styles.css": "./dist/styles.css"
   },
+  "sideEffects": [
+    "*.css"
+  ],
   "files": [
     "dist",
     "src"
@@ -24,13 +28,16 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts,.tsx"
+    "lint": "eslint src --ext .ts,.tsx",
+    "lint:fix": "eslint src --ext .ts,.tsx --fix",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build:lib"
   },
   "peerDependencies": {
     "react": "^18.0.0 || ^19.0.0",
     "react-dom": "^18.0.0 || ^19.0.0"
   },
   "dependencies": {
+    "@chenglou/pretext": "^0.0.8",
     "@tanstack/react-virtual": "^3.10.0",
     "idb": "^8.0.0",
     "minisearch": "^7.1.0"
@@ -43,10 +50,14 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "cross-env": "^10.1.0",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^15.15.0",
     "jsdom": "^29.1.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "typescript": "^5.5.0",
+    "typescript-eslint": "^8.62.1",
     "vite": "^5.4.0",
     "vitest": "^2.1.9"
   },
@@ -68,7 +79,9 @@
     "pretext",
     "scroll-to-match",
     "ctrl-f",
-    "highlight"
+    "highlight",
+    "regex-search",
+    "minimap"
   ],
   "license": "MIT"
 }

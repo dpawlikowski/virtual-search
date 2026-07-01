@@ -62,8 +62,10 @@ export function useSearchToggle(options: UseSearchToggleOptions = {}): UseSearch
   // Keep latest callbacks without re-binding the listener
   const onOpenRef = useRef(onOpen)
   const onCloseRef = useRef(onClose)
-  onOpenRef.current = onOpen
-  onCloseRef.current = onClose
+  useEffect(() => {
+    onOpenRef.current = onOpen
+    onCloseRef.current = onClose
+  }, [onOpen, onClose])
 
   const open = useCallback(() => {
     setVisible((wasVisible) => {

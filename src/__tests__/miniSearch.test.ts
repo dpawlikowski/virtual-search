@@ -61,11 +61,11 @@ describe('createSearchIndex + searchItems', () => {
     expect(ids).toContain('5') // "lazy cat"
   })
 
-  it('highlights map contains matched field', () => {
+  it('terms map contains matched field', () => {
     const idx = createSearchIndex(items, ['text'])
     const map = buildMap(items)
     const results = searchItems(idx, 'hooks', map)
-    expect(results[0]?.highlights.has('text')).toBe(true)
+    expect(results[0]?.terms.has('text')).toBe(true)
   })
 
   it('filters out items not in indexMap', () => {
@@ -134,17 +134,15 @@ describe('incremental indexing', () => {
   })
 })
 
-describe('highlight ranges end-to-end', () => {
+describe('terms end-to-end', () => {
   it('produces resolvable ranges for a match', () => {
     const idx = createSearchIndex(items, ['text'])
     const map = buildMap(items)
     const results = searchItems(idx, 'TypeScript', map)
     const match = results.find(r => r.itemId === '3')!
-    const fieldRanges = match.highlights.get('text')!
-    const terms = (fieldRanges as Array<{ term?: string }>).map(r => r.term!).filter(Boolean)
+    const terms = match.terms.get('text')!
     const resolved = resolveRanges(items[2].text, terms)
     expect(resolved.length).toBeGreaterThan(0)
-    // the resolved range should actually point at "TypeScript"
     const r = resolved[0]
     expect(items[2].text.slice(r.start, r.end).toLowerCase()).toContain('typescript')
   })

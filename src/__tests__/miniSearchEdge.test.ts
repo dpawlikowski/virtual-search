@@ -62,10 +62,10 @@ describe('searchItems — highlight structure', () => {
     }
   })
 
-  it('highlights are a Map instance', () => {
+  it('terms are a Map instance', () => {
     const idx = createSearchIndex(items, ['text'])
     const results = searchItems(idx, 'hooks', buildMap(items))
-    expect(results[0].highlights).toBeInstanceOf(Map)
+    expect(results[0].terms).toBeInstanceOf(Map)
   })
 
   it('returns no results for single-character query below min token length', () => {

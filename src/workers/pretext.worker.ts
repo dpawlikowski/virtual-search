@@ -1,18 +1,27 @@
 /**
  * Pretext Web Worker
  *
- * Attempts to load @chenglou/pretext for accurate off-thread text measurement.
- * Falls back to character-count heuristic if the package is not installed.
+ * Uses @chenglou/pretext for accurate off-thread text measurement (line
+ * breaking aware of font metrics and varying text/widths). Falls back to a
+ * character-count heuristic if the module fails to load.
  *
- * Messages in:  { type: 'PREPARE_BATCH', items, font, containerWidth, lineHeight, requestId }
- *               { type: 'LAYOUT_RESIZE', containerWidth, lineHeight, requestId }
- * Messages out: { type: 'HEIGHTS_READY', heights: [id, number][], requestId }
+ * Messages in:  { type: 'PREPARE_BATCH', items, font, containerWidth, lineHeight }
+ *               { type: 'LAYOUT_RESIZE', containerWidth, lineHeight }
+ * Messages out: { type: 'HEIGHTS_READY', heights: [id, number][] }
  */
+
+import { WorkerMsg } from './workerMessages'
 
 interface PretextModule {
   prepare: (text: string, font: string) => unknown
   layout: (prepared: unknown, width: number, lineHeight: number) => { height: number }
 }
+
+const AVG_CHAR_WIDTH_RATIO = 0.55
+const DEFAULT_FONT_SIZE_PX = 16
+const DEFAULT_CONTAINER_WIDTH = 800
+const DEFAULT_LINE_HEIGHT = 24
+const DEFAULT_FONT = '16px Inter'
 
 let pretextModule: PretextModule | null = null
 let pretextChecked = false
@@ -22,11 +31,8 @@ async function ensurePretext(): Promise<boolean> {
   if (pretextChecked) return pretextModule !== null
   pretextChecked = true
   try {
-    // @vite-ignore — optional peer dep, may not be installed
-    const pkg = '@chenglou/pretext'
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const mod = await import(/* @vite-ignore */ pkg as string)
-    pretextModule = mod as PretextModule
+    const mod = await import('@chenglou/pretext')
+    pretextModule = mod as unknown as PretextModule
     return true
   } catch {
     pretextModule = null
@@ -40,7 +46,7 @@ function estimateHeightFallback(
   lineHeight: number,
   fontSizePx: number
 ): number {
-  const avgCharWidth = fontSizePx * 0.55
+  const avgCharWidth = fontSizePx * AVG_CHAR_WIDTH_RATIO
   const charsPerLine = Math.max(1, Math.floor(containerWidth / avgCharWidth))
   const estimatedLines = Math.ceil((text.length || 1) / charsPerLine)
   return Math.max(lineHeight, estimatedLines * lineHeight)
@@ -48,7 +54,7 @@ function estimateHeightFallback(
 
 function parseFontSize(font: string): number {
   const m = font.match(/(\d+(?:\.\d+)?)px/)
-  return m ? parseFloat(m[1]) : 16
+  return m ? parseFloat(m[1]) : DEFAULT_FONT_SIZE_PX
 }
 
 interface WorkerMessage {
@@ -57,18 +63,17 @@ interface WorkerMessage {
   font?: string
   containerWidth?: number
   lineHeight?: number
-  requestId?: string
 }
 
 self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
-  const { type, requestId } = e.data
+  const { type } = e.data
 
-  if (type === 'PREPARE_BATCH') {
+  if (type === WorkerMsg.PREPARE_BATCH) {
     const {
       items = [],
-      font = '16px Inter',
-      containerWidth = 800,
-      lineHeight = 24,
+      font = DEFAULT_FONT,
+      containerWidth = DEFAULT_CONTAINER_WIDTH,
+      lineHeight = DEFAULT_LINE_HEIGHT,
     } = e.data
 
     const hasPre = await ensurePretext()
@@ -99,15 +104,15 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
       }
     }
 
-    self.postMessage({ type: 'HEIGHTS_READY', heights, requestId })
+    self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights })
     return
   }
 
-  if (type === 'LAYOUT_RESIZE') {
-    const { containerWidth = 800, lineHeight = 24 } = e.data
+  if (type === WorkerMsg.LAYOUT_RESIZE) {
+    const { containerWidth = DEFAULT_CONTAINER_WIDTH, lineHeight = DEFAULT_LINE_HEIGHT } = e.data
 
     if (!pretextModule || preparedCache.size === 0) {
-      self.postMessage({ type: 'HEIGHTS_READY', heights: [], requestId })
+      self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights: [] })
       return
     }
 
@@ -120,6 +125,6 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         // skip — old value remains in heightStore
       }
     }
-    self.postMessage({ type: 'HEIGHTS_READY', heights, requestId })
+    self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights })
   }
 }

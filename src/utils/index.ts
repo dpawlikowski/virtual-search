@@ -1,5 +1,10 @@
 import type { ViewportBucket } from '../types'
 
+export const EMA_DEFAULT_ALPHA = 0.1
+export const EMA_WARMUP_SAMPLES = 10
+export const EMA_READY_THRESHOLD = 3
+export const EMA_DEFAULT_FALLBACK = 150
+
 export function getViewportBucket(width: number): ViewportBucket {
   if (width < 480) return 'xs'
   if (width < 768) return 'sm'
@@ -41,13 +46,13 @@ export class EMA {
   private count = 0
   private readonly alpha: number
 
-  constructor(alpha = 0.1) {
+  constructor(alpha = EMA_DEFAULT_ALPHA) {
     this.alpha = alpha
   }
 
   update(newVal: number): number {
     this.count++
-    if (this.count < 10 || this.value === null) {
+    if (this.count < EMA_WARMUP_SAMPLES || this.value === null) {
       this.value = this.value === null
         ? newVal
         : (this.value * (this.count - 1) + newVal) / this.count
@@ -58,10 +63,10 @@ export class EMA {
   }
 
   get current(): number {
-    return this.value ?? 150
+    return this.value ?? EMA_DEFAULT_FALLBACK
   }
 
   get ready(): boolean {
-    return this.count >= 3
+    return this.count >= EMA_READY_THRESHOLD
   }
 }

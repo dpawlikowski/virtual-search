@@ -35,7 +35,7 @@ Dla każdego jeszcze-nie-wyrenderowanego elementu wysokość pochodzi z (w kolej
 ```
 1. server hints   — item._hints[bucket].p50 (jeśli n >= serverHintMinSamples)
 2. IndexedDB      — pomiar tego użytkownika z poprzednich sesji
-3. Pretext Worker — pomiar tekstu off-thread (jeśli @chenglou/pretext zainstalowany)
+3. Pretext Worker — pomiar tekstu off-thread (@chenglou/pretext)
 4. EMA fallback   — średnia ruchoma z już zmierzonych (per typ jeśli podany)
 ```
 
@@ -88,8 +88,9 @@ useSearchableList(options)   // główny hook
 useSearchToggle(options?)    // Ctrl+F toggle
 
 // Komponenty
-SearchBar                    // gotowy search input
+SearchBar                    // gotowy search input (+ przełączniki regex/exact/case gdy onOptionsChange podany)
 HighlightedText              // tekst z highlightem
+MatchMinimap                 // ścieżka znaczników dopasowań na scrollbarze (find-in-page style), roving-tabindex keyboard nav
 
 // Util
 resolveRanges                // zakresy znaków z termów (do custom rendererów)
@@ -114,7 +115,11 @@ interface UseSearchableListOptions<T extends VirtualItem> {
 }
 ```
 
-Zwraca: `items, virtualizer, search, setQuery, nextMatch, prevMatch, getHighlights, getIsActiveMatch, observeItem, containerRef, getHeightSource`.
+Zwraca: `items, virtualizer, search, setQuery, setSearchOptions, nextMatch, prevMatch, goToMatch, getHighlights, getIsActiveMatch, observeItem, containerRef, getHeightSource`.
+
+`search.options` (`SearchOptions`: `regex?`, `exactMatch?`, `caseSensitive?`, `wholeWord?`) steruje trybem dopasowania w `miniSearchAdapter.searchItems` — regex/exact omijają indeks MiniSearch i skanują itemy bezpośrednio (liniowo), bo MiniSearch nie wspiera regexów ani świadomości wielkości liter. `wholeWord` w trybie fuzzy wyłącza `prefix` w wywołaniu `index.search()`; w trybie exact owija wzorzec `\b...\b`; ignorowany w trybie regex (user sam pisze `\b`).
+
+`caseSensitive`/`wholeWord` wpływają też na podświetlanie (`resolveRanges`) — patrz `isHighlightCaseSensitive` w `miniSearchAdapter.ts` i analogiczna logika w `useSearchableList`'s `highlightsCaseSensitive`/`highlightsWholeWord`. Bez tego gatingu `caseSensitive` w trybie fuzzy psuje highlighting całkowicie (terminy z MiniSearch są zlowercase'owane wewnętrznie, więc case-sensitive regex nigdy by ich case-sensitively nie dopasował).
 
 ### Wymagania na element itemu (w rendererze)
 
@@ -142,10 +147,9 @@ interface VirtualItem {
 - `@tanstack/react-virtual` — wirtualizacja (jedyne źródło pomiaru runtime)
 - `minisearch` — full-text search index
 - `idb` — wrapper IndexedDB
+- `@chenglou/pretext` — dokładny pomiar tekstu off-thread (line-breaking świadomy realnych metryk fontu). Worker `await import()`-uje go normalnie (bundlowany przez Vite); jeśli załadowanie kiedykolwiek się nie powiedzie w danym środowisku, worker spada do heurystyki char-count (~80% trafności).
 
 **Peer:** `react`, `react-dom` (18 lub 19)
-
-**Opcjonalna:** `@chenglou/pretext` — dokładny pomiar tekstu off-thread. Bez niej worker używa heurystyki char-count (~80% trafności). Worker ładuje ją dynamicznie z `@vite-ignore` żeby nie wywalić builda gdy nieobecna.
 
 ---
 
@@ -154,7 +158,8 @@ interface VirtualItem {
 ```bash
 npm install              # instalacja (użyj --legacy-peer-deps jeśli konflikt)
 npm run dev              # demo na localhost:5173
-npm test                 # 130 testów (vitest)
+npm test                 # 205 testów (vitest)
+npm run lint              # eslint (flat config w eslint.config.js)
 npm run typecheck        # tsc --noEmit
 npm run build:lib        # build biblioteki do dist/
 ```

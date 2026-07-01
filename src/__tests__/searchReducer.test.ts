@@ -3,15 +3,16 @@ import { searchReducer } from '../hooks/useSearchableList'
 import type { SearchState } from '../types'
 
 const makeMatch = (id: string, index: number) => ({
-  itemId: id, index, score: 1, highlights: new Map(),
+  itemId: id, index, score: 1, terms: new Map<string, string[]>(),
 })
 
-const empty: SearchState = { query: '', matches: [], activeMatchIndex: 0, isSearching: false }
+const empty: SearchState = { query: '', matches: [], activeMatchIndex: 0, isSearching: false, options: {} }
 const withMatches: SearchState = {
   query: 'foo',
   matches: [makeMatch('a', 0), makeMatch('b', 1), makeMatch('c', 2)],
   activeMatchIndex: 0,
   isSearching: false,
+  options: {},
 }
 
 describe('searchReducer', () => {

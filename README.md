@@ -25,8 +25,10 @@ This library solves both. Runtime measurement and scroll anchoring are delegated
 - **Hybrid initial height estimation** — 4-layer cascade: server hints → IndexedDB (previous sessions) → Pretext (off-thread text measurement) → EMA fallback
 - **Measurement owned by TanStack Virtual** — once an item renders, `measureElement` takes over; no duplicate ResizeObserver, no manual scroll anchoring to fight with
 - **Full-text search** — MiniSearch indexes every item immediately, including text not currently rendered in the DOM
+- **Regex / exact-match / case-sensitive search modes** — toggle via `setSearchOptions`; `SearchBar` ships with `.*` / `" "` / `Aa` buttons when `onOptionsChange` is passed
 - **Optional server search** — pass `onServerSearch` to merge extra results from your API into the local list (lightweight, no worker, fully optional)
-- **Scroll-to-match** — jumps to the exact item containing the match, centers it in the viewport
+- **Scroll-to-match** — jumps to the exact item containing the match, centers it in the viewport, and self-corrects on the next frame once unmeasured items settle into their real height
+- **Match minimap** — `MatchMinimap` renders a find-in-page style marker track alongside the scroll container, with click-to-jump
 - **Ctrl+F to show/hide** — optional `useSearchToggle` hook binds Ctrl+F (Cmd+F on macOS) to toggle the search bar, auto-focuses the input, and closes on Escape
 - **Inline highlight** — character-level ranges passed to your item renderer; the provided `HighlightedText` component renders the spans
 - **TypeScript-first** — strict types throughout, zero `any`
@@ -160,15 +162,9 @@ interface ItemWithHints {
 
 Collect measurements via `onMeasureReport` and aggregate server-side using the P2 algorithm for running percentiles without storing raw values.
 
-### Using Pretext for higher accuracy
+### Pretext-powered measurement
 
-Install `@chenglou/pretext` for precise off-thread text measurement:
-
-```
-npm install @chenglou/pretext
-```
-
-The worker uses it automatically. Without it, the worker falls back to a character-count estimator (~80% accurate for typical text).
+`@chenglou/pretext` ships as a regular dependency and is used automatically by the Pretext worker for precise off-thread text measurement — line-breaking aware of real font metrics, accurate across varying text lengths and widths. If it ever fails to load in a given environment, the worker falls back to a character-count estimator (~80% accurate for typical text).
 
 **Caveat:** Pretext requires a named font (`16px Inter`, not `system-ui`).
 
@@ -196,6 +192,11 @@ interface UseSearchableListOptions<T extends VirtualItem> {
 
   // Storage
   cacheStoreName?: string                   // default: 'virtual-search-heights'
+
+  // Tuning — sensible defaults, override only if profiling shows a need to
+  persistDebounceMs?: number                // default: 500ms — debounce before a measured height is written to IndexedDB
+  resizeDebounceMs?: number                 // default: 200ms — debounce before a container resize triggers Pretext re-layout
+  overscan?: number                         // default: 4 — extra items rendered outside the viewport, passed to TanStack Virtual
 }
 ```
 
@@ -205,15 +206,76 @@ Returns:
 |---|---|---|
 | `items` | `T[]` | Local items, plus any `onServerSearch` results merged in |
 | `virtualizer` | TanStack virtualizer | Full TanStack Virtual instance |
-| `search` | `SearchState` | `{ query, matches, activeMatchIndex, isSearching }` |
+| `search` | `SearchState` | `{ query, matches, activeMatchIndex, isSearching, options }` |
 | `setQuery` | `(q: string) => void` | Update search query |
+| `setSearchOptions` | `(options: Partial<SearchOptions>) => void` | Toggle `regex` / `exactMatch` / `caseSensitive` / `wholeWord` and re-run the current query |
 | `nextMatch` | `() => void` | Move to next match and scroll to it |
 | `prevMatch` | `() => void` | Move to previous match and scroll to it |
+| `goToMatch` | `(matchIndex: number) => void` | Jump directly to a match by index (e.g. from a `MatchMinimap` marker) |
 | `getHighlights` | `(index: number) => Map<field, MatchRange[]> \| undefined` | Character ranges for a given item (lazy — only for visible items) |
 | `getIsActiveMatch` | `(itemId: string) => boolean` | O(1) check whether an item is the active match |
 | `observeItem` | `(el: HTMLElement \| null) => void` | Ref callback for each item element |
 | `containerRef` | `RefObject<HTMLDivElement>` | Attach to the scroll container |
 | `getHeightSource` | `(index: number) => HeightSource` | Debug: which layer provided the initial height |
+
+### Search options — regex / exact match / whole word / case sensitivity
+
+```ts
+interface SearchOptions {
+  regex?: boolean          // treat the query as a regular expression
+  exactMatch?: boolean     // literal substring match instead of fuzzy/prefix (ignored if `regex` is set)
+  caseSensitive?: boolean  // only applies to regex/exactMatch — fuzzy search is always case-insensitive
+  wholeWord?: boolean      // word-boundary constrained; disables prefix matching in fuzzy mode. Ignored if `regex` is set
+}
+```
+
+```tsx
+const { search, setSearchOptions } = useSearchableList({ items })
+
+<SearchBar search={search} onOptionsChange={setSearchOptions} /* …rest */ />
+```
+
+`SearchBar` renders `.*` (regex), `" "` (exact match), `|ab|` (whole word), and `Aa` (case sensitive) toggle buttons whenever `onOptionsChange` is passed. Omit the prop to hide them and keep plain fuzzy search.
+
+Two toggles are conditionally disabled, matching what actually has an effect:
+- **`Aa`** is disabled unless `regex` or `exactMatch` is active — MiniSearch's fuzzy/prefix terms are lowercased internally, so case-sensitivity has no meaningful effect in plain fuzzy mode.
+- **`|ab|`** is disabled while `regex` is active — write `\b` yourself for full control there.
+
+### `MatchMinimap`
+
+Overlays the scroll container's own scrollbar track with small yellow ticks — like find-in-page in browsers/VSCode — rather than floating as a separate strip beside it. Each marker's position comes from the match's real offset in the full (possibly virtualized, not-yet-rendered) list via `virtualizer.getOffsetForIndex`, so it reflects where the match actually is, not an approximation. Dense result sets are bucketed to the track's real pixel height so they render as a handful of distinct rectangles instead of one solid bar. Positions are computed across the *entire* list, so matches deep in not-yet-rendered territory still show up at the right spot — click anywhere on the track to jump straight there without first scrolling to find it.
+
+A dense result set can fill the whole track with marker ticks, burying the scrollbar thumb underneath with no visible handle left to grab — so `MatchMinimap` also renders its own scroll-position thumb on top of the markers (higher `z-index`, a distinct color, protruding slightly past the track's right edge), reflecting the scroll container's real viewport and fully draggable to scroll.
+
+A bucket's match count is a pixel-resolution artifact, not a "these are all right next to each other" guarantee — at low zoom (a long list against a short track) a single bucket can lump together matches actually scattered across a large chunk of the list. It's labeled `~N matches in this area` (both the `aria-label` and the hover tooltip) rather than implying an exact, tightly-clustered position, and the marker's own height grows (log-scaled, capped) with cluster size so a genuinely dense cluster reads as a visibly thicker band than a single match's thin tick.
+
+**Important — `MatchMinimap` must be a DOM sibling of the scroll container, not a child of it.** It needs a *non-scrolling* positioned ancestor to anchor to; if you nest it inside the element that has `overflow: auto`, its `position: absolute` offsets get carried along by that element's own scrolling and it visually disappears as soon as you scroll past the first viewport-height of content:
+
+```tsx
+<div className="vs-list-wrapper">{/* plain position: relative, does NOT scroll */}
+  <div ref={containerRef} className="vs-container" style={{ height: 600 }}>
+    {/* …virtualized items… */}
+  </div>
+
+  <MatchMinimap
+    virtualizer={virtualizer}
+    matches={search.matches}
+    activeMatchIndex={search.activeMatchIndex}
+    onJump={goToMatch}
+    items={items}              // optional — enables the hover tooltip. Plain VirtualItem[] is enough, no need to narrow the type
+    searchOptions={search.options}  // optional — passed straight from useSearchableList
+    markerHeightPx={4}         // optional — default 4
+    snippetContextChars={28}   // optional — chars of context on each side of the match in the tooltip, default 28
+  />
+</div>
+```
+
+`.vs-list-wrapper` (just `position: relative`) is included in `styles.css` — reuse it, or apply the same on your own wrapper.
+
+- **Click anywhere on the track**, not just exactly on a marker, to jump to the nearest match.
+- **Hover (or focus) a marker** to see a tooltip with a short excerpt around that match and the searched term in bold — pass `items` to enable it.
+- **Keyboard**: the track is a single Tab stop (roving tabindex, defaulting to the marker containing the active match) — Arrow Up/Down/Left/Right moves between markers, Home/End jump to the first/last, Enter/Space jumps to the focused one. This avoids flooding the page's tab order with one stop per match, which a dense result set could easily number in the hundreds.
+- `.vs-container`'s scrollbar is styled to a fixed, known width (`--vs-scrollbar-width`, default `10px`) so the minimap can be sized to exactly overlay it, and positioned flush to its right edge (`right: 0`) — same reason it needs the non-scrolling wrapper above: it has to line up with the scrollbar visually regardless of scroll position.
 
 ### `VirtualItem` interface
 
@@ -332,6 +394,10 @@ You can't measure an element that isn't in the DOM, and rendering 10 000 element
 
 The MiniSearch index is built once and only *added to* as new items arrive (e.g. from `onServerSearch`). It is never rebuilt from scratch on every items change — a full rebuild at 5 000 items would block the main thread for tens of milliseconds on each update.
 
+### How this compares to react-window / react-virtuoso on height estimation
+
+`react-window`'s `VariableSizeList` takes a single flat `estimatedItemSize` and corrects it just-in-time via `resetAfterIndex` once an item renders — there's no notion of a *smarter* initial guess (see [bvaughn/react-window#6](https://github.com/bvaughn/react-window/issues/6) and [#190](https://github.com/bvaughn/react-window/issues/190), where users have been asking for exactly this since 2019). `react-virtuoso` handles unknown heights well at runtime but doesn't ship an off-thread text-measurement layer either. This library's 4-layer cascade — server hints, IndexedDB, Pretext, EMA — produces a materially better *first paint* estimate than either, at the cost of the added complexity documented above.
+
 ---
 
 ## Known limitations
@@ -348,7 +414,9 @@ The MiniSearch index is built once and only *added to* as new items arrive (e.g.
 ```bash
 npm install
 npm run dev       # demo at http://localhost:5173
-npm test          # vitest — 130 tests
+npm test          # vitest — 205 tests
+npm run lint
+npm run lint:fix  # auto-fix what ESLint can
 npm run typecheck
 ```
 

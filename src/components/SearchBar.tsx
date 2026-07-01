@@ -1,11 +1,13 @@
 import React, { useCallback, useRef, type RefObject } from 'react'
-import type { SearchState } from '../types'
+import type { SearchState, SearchOptions } from '../types'
 
 interface SearchBarProps {
   search: SearchState
   onQueryChange: (q: string) => void
   onNext: () => void
   onPrev: () => void
+  /** Toggle regex / exact-match / case-sensitive search modes. Omit to hide the option toggles. */
+  onOptionsChange?: (options: Partial<SearchOptions>) => void
   className?: string
   placeholder?: string
   /**
@@ -25,6 +27,7 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   onQueryChange,
   onNext,
   onPrev,
+  onOptionsChange,
   className = '',
   placeholder = 'Search…',
   inputRef: externalRef,
@@ -36,7 +39,8 @@ export const SearchBar: React.FC<SearchBarProps> = ({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === 'Enter') {
-        e.shiftKey ? onPrev() : onNext()
+        if (e.shiftKey) onPrev()
+        else onNext()
       }
       if (e.key === 'Escape') {
         onQueryChange('')
@@ -64,6 +68,57 @@ export const SearchBar: React.FC<SearchBarProps> = ({
         autoComplete="off"
         spellCheck={false}
       />
+
+      {onOptionsChange && (
+        <span className="vs-search-options" role="group" aria-label="Search options">
+          <button
+            type="button"
+            className={`vs-search-opt ${search.options.regex ? 'vs-search-opt-active' : ''}`}
+            onClick={() => onOptionsChange({ regex: !search.options.regex, exactMatch: false })}
+            aria-pressed={!!search.options.regex}
+            aria-label="Use regular expression"
+            title="Regex"
+          >
+            .*
+          </button>
+          <button
+            type="button"
+            className={`vs-search-opt ${search.options.exactMatch ? 'vs-search-opt-active' : ''}`}
+            onClick={() => onOptionsChange({ exactMatch: !search.options.exactMatch, regex: false })}
+            aria-pressed={!!search.options.exactMatch}
+            aria-label="Exact match"
+            title="Exact match"
+          >
+            " "
+          </button>
+          <button
+            type="button"
+            className={`vs-search-opt ${search.options.wholeWord ? 'vs-search-opt-active' : ''}`}
+            onClick={() => onOptionsChange({ wholeWord: !search.options.wholeWord })}
+            disabled={!!search.options.regex}
+            aria-pressed={!!search.options.wholeWord}
+            aria-label="Whole word"
+            title={search.options.regex ? 'Whole word (ignored in Regex mode — use \\b yourself)' : 'Whole word'}
+          >
+            |ab|
+          </button>
+          <button
+            type="button"
+            className={`vs-search-opt ${search.options.caseSensitive ? 'vs-search-opt-active' : ''}`}
+            onClick={() => onOptionsChange({ caseSensitive: !search.options.caseSensitive })}
+            disabled={!search.options.regex && !search.options.exactMatch}
+            aria-pressed={!!search.options.caseSensitive}
+            aria-label="Case sensitive"
+            title={
+              search.options.regex || search.options.exactMatch
+                ? 'Case sensitive'
+                : 'Case sensitive (enable Regex or Exact match first — fuzzy search is always case-insensitive)'
+            }
+          >
+            Aa
+          </button>
+        </span>
+      )}
 
       {search.query && (
         <span className="vs-search-count" aria-live="polite" aria-atomic>

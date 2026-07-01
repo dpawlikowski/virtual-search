@@ -1,10 +1,44 @@
 /* virtual-search default styles — import or override as needed */
 
+/* Wrap .vs-container + MatchMinimap in this so the minimap stays fixed in
+   the viewport as a scrollbar overlay instead of scrolling away with the
+   list content — MatchMinimap must be a DOM sibling of .vs-container, not a
+   child of it, or its `position: absolute` offsets get carried along by the
+   container's own scrolling. */
+.vs-list-wrapper {
+  position: relative;
+}
+
 .vs-container {
   position: relative;
   overflow: auto;
   -webkit-overflow-scrolling: touch;
   overflow-anchor: auto; /* Enable CSS scroll anchoring where supported */
+  /* Fixed, known scrollbar width (Firefox) so .vs-minimap can be sized to
+     exactly overlay it instead of floating as a separate strip. */
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
+/* Chromium/WebKit: same intent as scrollbar-width: thin — a fixed, narrow,
+   predictable scrollbar track that .vs-minimap's width/position can match. */
+.vs-container::-webkit-scrollbar {
+  width: var(--vs-scrollbar-width, 10px);
+}
+
+.vs-container::-webkit-scrollbar-track {
+  background: var(--vs-scrollbar-track-bg, transparent);
+}
+
+.vs-container::-webkit-scrollbar-thumb {
+  background: var(--vs-scrollbar-thumb-bg, #d1d5db);
+  border-radius: 5px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .vs-container::-webkit-scrollbar-thumb {
+    background: var(--vs-scrollbar-thumb-bg, #4b5563);
+  }
 }
 
 .vs-list {
@@ -74,6 +108,163 @@
   cursor: not-allowed;
 }
 
+.vs-search-options {
+  display: flex;
+  gap: 2px;
+  padding: 0 2px;
+  border-left: 1px solid var(--vs-search-border, #d1d5db);
+  border-right: 1px solid var(--vs-search-border, #d1d5db);
+}
+
+.vs-search-opt {
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vs-btn-color, #374151);
+  line-height: 1.4;
+}
+
+.vs-search-opt:hover {
+  background: var(--vs-btn-hover-bg, #f3f4f6);
+}
+
+.vs-search-opt-active {
+  background: var(--vs-opt-active-bg, #dbeafe);
+  color: var(--vs-opt-active-color, #1d4ed8);
+}
+
+.vs-search-opt:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.vs-search-opt:disabled:hover {
+  background: none;
+}
+
+/* Match minimap — overlays the container's own scrollbar track (same width,
+   flush to the edge) so matches read as ticks ON the existing scrollbar
+   rather than a separate strip floating beside it. Position/width are kept
+   in sync with .vs-container's ::-webkit-scrollbar / scrollbar-width rules
+   above via the shared --vs-scrollbar-width variable. */
+.vs-minimap {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--vs-scrollbar-width, 10px);
+  cursor: pointer;
+  /* Sits above the list content as a sibling of .vs-container (see
+     .vs-list-wrapper) so it stays fixed while the list scrolls — that also
+     means it paints over the native scrollbar track/thumb underneath. Tint
+     the track so it reads as its own distinct lane rather than silently
+     hiding the scrollbar, and keep the tint translucent so the native
+     thumb is still visible through it. */
+  z-index: 20;
+  background: var(--vs-minimap-track-bg, rgba(148, 163, 184, 0.18));
+  border-left: 1px solid var(--vs-minimap-track-border, rgba(100, 116, 139, 0.35));
+  box-sizing: border-box;
+}
+
+@media (prefers-color-scheme: dark) {
+  .vs-minimap {
+    background: var(--vs-minimap-track-bg, rgba(148, 163, 184, 0.12));
+    border-left-color: var(--vs-minimap-track-border, rgba(148, 163, 184, 0.25));
+  }
+}
+
+.vs-minimap-marker {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  width: auto;
+  height: 3px;
+  border: none;
+  border-radius: 1px;
+  background: var(--vs-minimap-marker-bg, #facc15);
+  cursor: pointer;
+  padding: 0;
+  transform: translateY(-50%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15);
+}
+
+.vs-minimap-marker--active {
+  background: var(--vs-minimap-marker-active-bg, #f59e0b);
+  height: 4px;
+}
+
+/* Real scroll-position handle, painted above the match markers. A dense
+   result set can fill the whole minimap track with yellow ticks, burying the
+   native/overlaid scrollbar thumb underneath with no visible handle left to
+   grab — so this is drawn on top (higher z-index), in a color that doesn't
+   compete with the marker yellow, and protrudes past the track's right edge
+   so it's always graspable even flush against a browser's own scrollbar. */
+.vs-minimap-thumb {
+  position: absolute;
+  left: -1px;
+  right: -3px;
+  z-index: 30;
+  border-radius: 3px;
+  background: var(--vs-minimap-thumb-bg, rgba(37, 99, 235, 0.55));
+  border: 1px solid var(--vs-minimap-thumb-border, rgba(29, 78, 216, 0.8));
+  box-sizing: border-box;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.vs-minimap-thumb:hover,
+.vs-minimap-thumb:active {
+  background: var(--vs-minimap-thumb-hover-bg, rgba(29, 78, 216, 0.75));
+  cursor: grabbing;
+}
+
+@media (prefers-color-scheme: dark) {
+  .vs-minimap-thumb {
+    background: var(--vs-minimap-thumb-bg, rgba(96, 165, 250, 0.55));
+    border-color: var(--vs-minimap-thumb-border, rgba(147, 197, 253, 0.8));
+  }
+  .vs-minimap-thumb:hover,
+  .vs-minimap-thumb:active {
+    background: var(--vs-minimap-thumb-hover-bg, rgba(147, 197, 253, 0.75));
+  }
+}
+
+.vs-minimap-tooltip {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 8px;
+  max-width: 260px;
+  width: max-content;
+  background: var(--vs-tooltip-bg, #1f2937);
+  color: var(--vs-tooltip-color, #f9fafb);
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 6px 10px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  white-space: normal;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.vs-minimap-tooltip strong {
+  background: var(--vs-tooltip-mark-bg, #facc15);
+  color: var(--vs-tooltip-mark-color, #1f2937);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.vs-minimap-tooltip__count {
+  opacity: 0.7;
+}
+
 /* Highlights */
 .vs-highlight {
   background: var(--vs-highlight-bg, #fef08a);
@@ -102,6 +293,23 @@
   .vs-search-nav:hover,
   .vs-search-clear:hover {
     background: var(--vs-btn-hover-bg, #374151);
+  }
+
+  .vs-search-options {
+    border-color: var(--vs-search-border, #374151);
+  }
+
+  .vs-search-opt {
+    color: var(--vs-btn-color, #d1d5db);
+  }
+
+  .vs-search-opt:hover {
+    background: var(--vs-btn-hover-bg, #374151);
+  }
+
+  .vs-search-opt-active {
+    background: var(--vs-opt-active-bg, #1e3a8a);
+    color: var(--vs-opt-active-color, #bfdbfe);
   }
 
   .vs-highlight {

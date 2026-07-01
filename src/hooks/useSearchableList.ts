@@ -14,13 +14,19 @@ import type {
   UseSearchableListReturn,
   HeightSource,
   SearchState,
+  SearchOptions,
   MatchRange,
   FontConfig,
 } from '../types'
 import { getViewportBucket, parseFontForPretext, hashFontConfig, debounce, EMA } from '../utils'
 import { bulkGetHeights, setHeight, evictStaleEntries } from '../storage/heightCache'
-import { createSearchIndex, searchItems, resolveRanges } from '../search/miniSearchAdapter'
-import MiniSearch from 'minisearch'
+import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
+import { WorkerMsg } from '../workers/workerMessages'
+
+const PERSIST_DEBOUNCE_MS = 500
+const RESIZE_DEBOUNCE_MS = 200
+const VIRTUALIZER_OVERSCAN = 4
+// ^ defaults for UseSearchableListOptions.persistDebounceMs / resizeDebounceMs / overscan
 
 // ─── HeightStore — provides INITIAL estimates only ───────────────────────────
 // Runtime measurement is owned entirely by TanStack Virtual's measureElement.
@@ -43,8 +49,6 @@ export class HeightStore {
   set(id: string, height: number, source: HeightSource, type?: string) {
     this.entries.set(id, { height, source })
     if (source !== 'default' && source !== 'ema') {
-      // Update global EMA always; type EMA only when a distinct type is given.
-      // ema(undefined) returns globalEma, so guard against double-counting.
       this.globalEma.update(height)
       if (type) this.ema(type).update(height)
     }
@@ -72,6 +76,8 @@ type SearchAction =
   | { type: 'NEXT_MATCH' }
   | { type: 'PREV_MATCH' }
   | { type: 'SET_SEARCHING'; value: boolean }
+  | { type: 'SET_OPTIONS'; options: SearchOptions }
+  | { type: 'SET_ACTIVE'; index: number }
 
 export function searchReducer(s: SearchState, a: SearchAction): SearchState {
   switch (a.type) {
@@ -80,6 +86,8 @@ export function searchReducer(s: SearchState, a: SearchAction): SearchState {
     case 'NEXT_MATCH': { const n = s.matches.length; return { ...s, activeMatchIndex: n === 0 ? 0 : (s.activeMatchIndex + 1) % n } }
     case 'PREV_MATCH': { const n = s.matches.length; return { ...s, activeMatchIndex: n === 0 ? 0 : (s.activeMatchIndex - 1 + n) % n } }
     case 'SET_SEARCHING': return { ...s, isSearching: a.value }
+    case 'SET_OPTIONS':   return { ...s, options: a.options }
+    case 'SET_ACTIVE':    return { ...s, activeMatchIndex: a.index }
     default: return s
   }
 }
@@ -98,18 +106,21 @@ export function useSearchableList<T extends VirtualItem>(
     onMeasureReport,
     cacheStoreName = 'virtual-search-heights',
     defaultItemHeight = 150,
+    persistDebounceMs = PERSIST_DEBOUNCE_MS,
+    resizeDebounceMs = RESIZE_DEBOUNCE_MS,
+    overscan = VIRTUALIZER_OVERSCAN,
   } = options
 
   const containerRef   = useRef<HTMLDivElement>(null)
   const workerRef      = useRef<Worker | null>(null)
   const heightStoreRef = useRef(new HeightStore(defaultItemHeight))
   const fontConfigRef  = useRef<FontConfig | null>(null)
-  const searchIndexRef = useRef<MiniSearch<VirtualItem> | null>(null)
+  const searchIndexRef = useRef<ReturnType<typeof createSearchIndex> | null>(null)
 
   const [serverItems, setServerItems] = useState<T[]>([])
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0)
   const [searchState, searchDispatch] = useReducer(searchReducer, {
-    query: '', matches: [], activeMatchIndex: 0, isSearching: false,
+    query: '', matches: [], activeMatchIndex: 0, isSearching: false, options: {},
   })
 
   // ── Items merge ───────────────────────────────────────────────────────────
@@ -119,7 +130,6 @@ export function useSearchableList<T extends VirtualItem>(
     return [...baseItems, ...serverItems.filter(i => !baseIds.has(i.id))]
   }, [baseItems, serverItems])
 
-  // Live ref so estimateSize closure reads current items without re-creating fn
   const itemsRef = useRef(items)
   itemsRef.current = items
 
@@ -151,13 +161,10 @@ export function useSearchableList<T extends VirtualItem>(
       const bucket = getViewportBucket(container?.clientWidth ?? 800)
       setHeight(id, h, bucket, fc.hash, cacheStoreName)
       onMeasureReport?.(id, h, bucket)
-    }, 500),
-  [cacheStoreName, onMeasureReport])
+    }, persistDebounceMs),
+  [cacheStoreName, onMeasureReport, persistDebounceMs])
 
-  // ── Virtualizer — TanStack owns ALL runtime measurement ───────────────────
-  // estimateSize is a STABLE closure reading itemsRef + heightStore for the
-  // INITIAL estimate. Once an element renders, measureElement (wired via the
-  // item ref) takes over and TanStack handles scroll anchoring internally.
+  // ── Virtualizer ───────────────────────────────────────────────────────────
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => containerRef.current,
@@ -165,16 +172,13 @@ export function useSearchableList<T extends VirtualItem>(
       const item = itemsRef.current[i]
       return heightStoreRef.current.getHeight(item?.id ?? '', item?.type)
     }, []),
-    overscan: 4,
-    // measureElement default uses getBoundingClientRect — correct for our case
+    overscan,
   })
 
-  // ── Item ref — ONLY wires TanStack measurement + persists to cache ────────
-  // No custom ResizeObserver, no manual scroll anchoring — TanStack does both.
+  // ── Item ref — wires TanStack measurement + persists to cache ─────────────
   const observeItem = useCallback((el: HTMLElement | null) => {
     if (!el) return
     virtualizer.measureElement(el)
-    // Persist the measured height after TanStack reads it
     const id = el.dataset.vsItemId
     if (id) {
       const h = el.getBoundingClientRect().height
@@ -203,7 +207,7 @@ export function useSearchableList<T extends VirtualItem>(
     const w = new Worker(new URL('../workers/pretext.worker.ts', import.meta.url), { type: 'module' })
     workerRef.current = w
     w.onmessage = (e: MessageEvent<{ type: string; heights: [string, number][] }>) => {
-      if (e.data.type !== 'HEIGHTS_READY') return
+      if (e.data.type !== WorkerMsg.HEIGHTS_READY) return
       let updated = false
       for (const [id, height] of e.data.heights) {
         if (!heightStoreRef.current.has(id)) {
@@ -211,7 +215,6 @@ export function useSearchableList<T extends VirtualItem>(
           updated = true
         }
       }
-      // Only re-estimate items NOT yet rendered/measured — measure() then render
       if (updated) {
         virtualizer.measure()
         forceUpdate()
@@ -250,12 +253,11 @@ export function useSearchableList<T extends VirtualItem>(
         .map(i => ({ id: i.id, text: i.text }))
       if (pretextItems.length > 0 && workerRef.current) {
         workerRef.current.postMessage({
-          type: 'PREPARE_BATCH', items: pretextItems,
+          type: WorkerMsg.PREPARE_BATCH, items: pretextItems,
           font: fc.font, containerWidth: container.clientWidth, lineHeight: fc.lineHeight,
         })
       }
     })()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, cacheStoreName, serverHintMinSamples])
 
   // ── Container resize → Pretext re-layout ─────────────────────────────────
@@ -266,13 +268,13 @@ export function useSearchableList<T extends VirtualItem>(
       const fc = fontConfigRef.current
       if (!fc || !workerRef.current) return
       workerRef.current.postMessage({
-        type: 'LAYOUT_RESIZE', containerWidth: container.clientWidth, lineHeight: fc.lineHeight,
+        type: WorkerMsg.LAYOUT_RESIZE, containerWidth: container.clientWidth, lineHeight: fc.lineHeight,
       })
-    }, 200)
+    }, resizeDebounceMs)
     const ro = new ResizeObserver(onResize)
     ro.observe(container)
     return () => ro.disconnect()
-  }, [])
+  }, [resizeDebounceMs])
 
   // ── Search index — incremental, never full rebuild ────────────────────────
   const indexedIdsRef = useRef(new Set<string>())
@@ -301,24 +303,44 @@ export function useSearchableList<T extends VirtualItem>(
   [onServerSearch, serverSearchDebounce])
 
   // ── setQuery ──────────────────────────────────────────────────────────────
-  const setQuery = useCallback((query: string) => {
-    searchDispatch({ type: 'SET_QUERY', query })
+  const runSearch = useCallback((query: string, options: SearchOptions) => {
     if (!query.trim()) {
       searchDispatch({ type: 'SET_MATCHES', matches: [] })
       return
     }
     searchDispatch({ type: 'SET_SEARCHING', value: true })
     if (searchIndexRef.current) {
-      const matches = searchItems(searchIndexRef.current, query, itemIndexMap)
+      const matches = searchItems(
+        searchIndexRef.current, query, itemIndexMap,
+        itemsRef.current as VirtualItem[], searchFields as string[], options
+      )
       searchDispatch({ type: 'SET_MATCHES', matches })
     }
+  }, [itemIndexMap, searchFields])
+
+  const setQuery = useCallback((query: string) => {
+    searchDispatch({ type: 'SET_QUERY', query })
+    runSearch(query, searchState.options)
     debouncedServerSearch(query)
-  }, [itemIndexMap, debouncedServerSearch])
+  }, [runSearch, searchState.options, debouncedServerSearch])
+
+  const setSearchOptions = useCallback((options: Partial<SearchOptions>) => {
+    const next = { ...searchState.options, ...options }
+    searchDispatch({ type: 'SET_OPTIONS', options: next })
+    runSearch(searchState.query, next)
+  }, [searchState.options, searchState.query, runSearch])
 
   // ── Navigate matches ──────────────────────────────────────────────────────
   const scrollToMatch = useCallback((idx: number) => {
     const match = searchState.matches[idx]
-    if (match) virtualizer.scrollToIndex(match.index, { align: 'center', behavior: 'auto' })
+    if (!match) return
+    virtualizer.scrollToIndex(match.index, { align: 'center', behavior: 'auto' })
+    // Estimated (unmeasured) item heights can shift the layout once real
+    // measurements land, throwing off the first scroll. Re-correct on the
+    // next frame after that reflow has settled.
+    requestAnimationFrame(() => {
+      virtualizer.scrollToIndex(match.index, { align: 'center', behavior: 'auto' })
+    })
   }, [searchState.matches, virtualizer])
 
   const nextMatch = useCallback(() => {
@@ -337,7 +359,19 @@ export function useSearchableList<T extends VirtualItem>(
     scrollToMatch(prev)
   }, [searchState, scrollToMatch])
 
+  const goToMatch = useCallback((idx: number) => {
+    if (idx < 0 || idx >= searchState.matches.length) return
+    searchDispatch({ type: 'SET_ACTIVE', index: idx })
+    scrollToMatch(idx)
+  }, [searchState.matches.length, scrollToMatch])
+
   // ── Highlights — lazy, per visible item ───────────────────────────────────
+  const highlightsCaseSensitive = isHighlightCaseSensitive(searchState.options)
+  // wholeWord is ignored in regex mode (the user writes \b themselves there);
+  // in fuzzy/exact mode it must also constrain highlighting, or a whole-word
+  // search for "cat" would still highlight "cat" inside "catalog".
+  const highlightsWholeWord = !!searchState.options.wholeWord && !searchState.options.regex
+
   const getHighlights = useCallback(
     (idx: number): Map<string, MatchRange[]> | undefined => {
       const item = items[idx]
@@ -345,17 +379,15 @@ export function useSearchableList<T extends VirtualItem>(
       const match = matchByItemId.get(item.id)
       if (!match) return undefined
       const out = new Map<string, MatchRange[]>()
-      for (const [field, ranges] of match.highlights) {
+      for (const [field, terms] of match.terms) {
         const val = (item as Record<string, unknown>)[field]
         if (typeof val === 'string') {
-          const terms = (ranges as Array<MatchRange & { term?: string }>)
-            .map(r => r.term).filter((t): t is string => Boolean(t))
-          out.set(field, resolveRanges(val, terms))
+          out.set(field, resolveRanges(val, terms, highlightsCaseSensitive, highlightsWholeWord))
         }
       }
       return out
     },
-    [items, matchByItemId]
+    [items, matchByItemId, highlightsCaseSensitive, highlightsWholeWord]
   )
 
   const getIsActiveMatch = useCallback(
@@ -373,8 +405,10 @@ export function useSearchableList<T extends VirtualItem>(
     virtualizer,
     search: searchState,
     setQuery,
+    setSearchOptions,
     nextMatch,
     prevMatch,
+    goToMatch,
     getHighlights,
     getIsActiveMatch,
     observeItem,

@@ -19,7 +19,7 @@ export const HighlightedText: React.FC<HighlightedTextProps> = ({
   activeRangeIndex,
 }) => {
   if (!ranges || ranges.length === 0) {
-    return <span>{text}</span>
+    return <>{text}</>
   }
 
   const parts: React.ReactNode[] = []
@@ -27,13 +27,11 @@ export const HighlightedText: React.FC<HighlightedTextProps> = ({
 
   ranges.forEach((range, i) => {
     if (range.start > cursor) {
-      parts.push(
-        <span key={`pre-${i}`}>{text.slice(cursor, range.start)}</span>
-      )
+      parts.push(text.slice(cursor, range.start))
     }
     parts.push(
       <mark
-        key={`mark-${i}`}
+        key={i}
         className={`${highlightClassName}${activeRangeIndex === i ? ` ${highlightClassName}--active` : ''}`}
         data-vs-highlight-index={i}
       >
@@ -44,7 +42,7 @@ export const HighlightedText: React.FC<HighlightedTextProps> = ({
   })
 
   if (cursor < text.length) {
-    parts.push(<span key="tail">{text.slice(cursor)}</span>)
+    parts.push(text.slice(cursor))
   }
 
   return <>{parts}</>
