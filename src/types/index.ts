@@ -72,10 +72,25 @@ export interface UseSearchableListOptions<T extends VirtualItem> {
   /** Height of the scroll container in px. Applied to the container element's `style.height` — set it here instead of duplicating it in your own CSS/style. */
   containerHeight?: number
   searchFields?: Array<keyof T & string>
-  onServerSearch?: (query: string) => Promise<T[]>
+  /**
+   * Transport-agnostic server search hook. Receives the query and an
+   * `AbortSignal` — pass the signal to `fetch`/your client so an in-flight
+   * request from a stale keystroke can be cancelled. Out-of-order responses
+   * are ignored automatically even if the signal isn't wired up.
+   */
+  onServerSearch?: (query: string, signal: AbortSignal) => Promise<T[]>
   serverSearchDebounce?: number
+  /** Queries shorter than this never reach `onServerSearch`. Default: 1. */
+  serverSearchMinLength?: number
   /** Called when `onServerSearch` rejects, so the host app can surface an error (e.g. a toast). Non-fatal — local search keeps working. */
   onSearchError?: (error: unknown) => void
+  /**
+   * Controls how `onServerSearch` results are combined with local `items`.
+   * Default: append server results not already present (by `id`) to the end
+   * of the local list. Override to sort, cap, or otherwise reshape the merge
+   * — still no knowledge of any particular API baked in.
+   */
+  mergeServerResults?: (base: T[], server: T[]) => T[]
   serverHintMinSamples?: number
   onMeasureReport?: (itemId: string, height: number, bucket: ViewportBucket) => void
   cacheStoreName?: string
@@ -111,4 +126,6 @@ export interface UseSearchableListReturn<T extends VirtualItem> {
   observeItem: (el: HTMLElement | null) => void
   containerRef: React.RefObject<HTMLDivElement>
   getHeightSource: (itemIndex: number) => HeightSource
+  /** True while an `onServerSearch` request is in flight. Independent of `search.isSearching` (local index search). */
+  isServerSearching: boolean
 }

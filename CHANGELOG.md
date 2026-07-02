@@ -6,6 +6,20 @@ All notable changes to `@virtual-search/core` are documented here.
 
 ### Added
 
+- **Server search overhaul** (`onServerSearch`), still fully transport-agnostic (no `fetch`/HTTP/GraphQL assumed):
+  - `onServerSearch` now receives an `AbortSignal` as a second argument — pass it to your request so a superseded in-flight call can actually be cancelled
+  - Stale responses are now ignored automatically (monotonic request-id guard), even if the signal isn't wired up, fixing a race where a slow earlier response could overwrite a faster later one
+  - New `serverSearchMinLength` option (default `1`) to skip calling `onServerSearch` for very short queries
+  - New `mergeServerResults` option — customize how server results combine with local `items` (default unchanged: append results not already present by `id`)
+  - New `isServerSearching` return value — loading state for the server round-trip only, independent of the local (synchronous) `search.isSearching`
+  - The implementation moved out of `useSearchableList` into its own hook, `useServerSearch`, so the debounce/abort/merge machinery is tree-shakeable for consumers who never pass `onServerSearch`
+
+### Fixed
+
+- `search.matches`/highlights were never recomputed when `items` changed shape after the initial search ran (e.g. `onServerSearch` results merging in, or a custom `mergeServerResults` reordering items) — a matching server-fetched item would render in the list but not be highlighted or reachable via `nextMatch`/`prevMatch` until the next keystroke re-ran the query
+- Falling below `serverSearchMinLength` (but not clearing the query entirely) left previously merged server results in `items` indefinitely instead of dropping them like an empty query does
+- `evictStaleEntries` (a full IndexedDB scan for the height cache) ran on every `items` change instead of only when `cacheStoreName`/`cacheTtlMs` changed — a burst of server-search merges while typing triggered a redundant sweep on every character
+- The server-hints → IndexedDB → Pretext height-init pass had no cancellation: if `items` changed again before a previous run's async steps finished, the stale run could still apply outdated heights or send a redundant batch to the Pretext worker
 - `useSearchableList` gained `scrollAlign` (`'start' | 'center' | 'end' | 'auto'`, default `'center'`) applied to `nextMatch`/`prevMatch`/`goToMatch` — previously hardcoded
 - `onSearchError` option — called when `onServerSearch` rejects, so the host app can surface an error (e.g. a toast) instead of the failure being silently swallowed
 - `cacheTtlMs` option — how long a cached height stays valid before `bulkGetHeights`/`evictStaleEntries` treat it as stale (previously a hardcoded 30-day constant, now exported as `DEFAULT_TTL_MS`)

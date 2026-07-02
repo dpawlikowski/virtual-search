@@ -128,7 +128,7 @@ describe('useSearchableList — items merge with onServerSearch', () => {
       useSearchableList({ items, onServerSearch, serverSearchDebounce: 0 })
     )
     act(() => result.current.setQuery('lazy'))
-    await waitFor(() => expect(onServerSearch).toHaveBeenCalledWith('lazy'))
+    await waitFor(() => expect(onServerSearch).toHaveBeenCalledWith('lazy', expect.any(AbortSignal)))
     await waitFor(() => expect(result.current.items.some(i => i.id === '6')).toBe(true))
     expect(result.current.items.filter(i => i.id === '1')).toHaveLength(1)
   })
@@ -154,6 +154,69 @@ describe('useSearchableList — items merge with onServerSearch', () => {
     )
     act(() => result.current.setQuery('lazy'))
     await waitFor(() => expect(onSearchError).toHaveBeenCalledWith(expect.any(Error)))
+  })
+
+  it('ignores a stale response when a newer query has since superseded it', async () => {
+    const onServerSearch = vi.fn()
+      .mockImplementationOnce(() => new Promise(resolve =>
+        setTimeout(() => resolve([{ id: 'slow', text: 'stale result' }]), 50)
+      ))
+      .mockImplementationOnce(async () => [{ id: 'fast', text: 'fresh result' }])
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(onServerSearch).toHaveBeenCalledTimes(1))
+    act(() => result.current.setQuery('lazier'))
+    await waitFor(() => expect(onServerSearch).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(result.current.items.some(i => i.id === 'fast')).toBe(true))
+    expect(result.current.items.some(i => i.id === 'slow')).toBe(false)
+  })
+
+  it('exposes isServerSearching while a request is in flight', async () => {
+    let resolveSearch: (v: typeof items) => void = () => {}
+    const onServerSearch = vi.fn(() => new Promise<typeof items>(resolve => { resolveSearch = resolve }))
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(result.current.isServerSearching).toBe(true))
+    act(() => resolveSearch([]))
+    await waitFor(() => expect(result.current.isServerSearching).toBe(false))
+  })
+
+  it('supports a custom mergeServerResults strategy', async () => {
+    const onServerSearch = vi.fn(async () => [{ id: '6', text: 'server result' }])
+    const mergeServerResults = vi.fn((base: typeof items, server: typeof items) => [...server, ...base])
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, mergeServerResults, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(result.current.items[0]?.id).toBe('6'))
+    expect(mergeServerResults).toHaveBeenCalled()
+  })
+
+  it('picks up matches/highlights for server results merged in after the initial search ran', async () => {
+    const onServerSearch = vi.fn(async () => [
+      { id: '6', text: 'lazy server-only result' },
+    ])
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(result.current.items.some(i => i.id === '6')).toBe(true))
+    await waitFor(() => expect(result.current.search.matches.some(m => m.itemId === '6')).toBe(true))
+  })
+
+  it('drops merged server results once the query falls below serverSearchMinLength', async () => {
+    const onServerSearch = vi.fn(async () => [{ id: '6', text: 'lazy server-only result' }])
+    const { result } = renderHook(() =>
+      useSearchableList({ items, onServerSearch, serverSearchMinLength: 3, serverSearchDebounce: 0 })
+    )
+    act(() => result.current.setQuery('lazy'))
+    await waitFor(() => expect(result.current.items.some(i => i.id === '6')).toBe(true))
+    act(() => result.current.setQuery('la'))
+    expect(result.current.items.some(i => i.id === '6')).toBe(false)
   })
 })
 

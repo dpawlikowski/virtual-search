@@ -26,7 +26,7 @@ This library solves both. Runtime measurement and scroll anchoring are delegated
 - **Measurement owned by TanStack Virtual** — once an item renders, `measureElement` takes over; no duplicate ResizeObserver, no manual scroll anchoring to fight with
 - **Full-text search** — MiniSearch indexes every item immediately, including text not currently rendered in the DOM
 - **Regex / exact-match / case-sensitive search modes** — toggle via `setSearchOptions`; `SearchBar` ships with `.*` / `" "` / `Aa` buttons when `onOptionsChange` is passed
-- **Optional server search** — pass `onServerSearch` to merge extra results from your API into the local list (lightweight, no worker, fully optional)
+- **Optional server search** — pass `onServerSearch` to merge extra results from wherever you fetch them into the local list. Transport-agnostic (no `fetch`/HTTP baked in): debounced, cancels stale in-flight requests via `AbortSignal`, ignores out-of-order responses, and its code lives in a separate hook (`useServerSearch`) so it tree-shakes away entirely for consumers who never set the option
 - **Scroll-to-match** — jumps to the exact item containing the match, centers it in the viewport, and self-corrects on the next frame once unmeasured items settle into their real height
 - **Match minimap** — `MatchMinimap` renders a find-in-page style marker track alongside the scroll container, with click-to-jump
 - **Ctrl+F to show/hide** — optional `useSearchToggle` hook binds Ctrl+F (Cmd+F on macOS) to toggle the search bar, auto-focuses the input, and closes on Escape
@@ -181,8 +181,10 @@ interface UseSearchableListOptions<T extends VirtualItem> {
 
   // Search
   searchFields?: Array<keyof T & string>    // default: ['text']
-  onServerSearch?: (q: string) => Promise<T[]>   // optional — merge extra results
+  onServerSearch?: (q: string, signal: AbortSignal) => Promise<T[]>  // optional — transport-agnostic, bring your own fetch/GraphQL/etc.
   serverSearchDebounce?: number             // default: 250ms
+  serverSearchMinLength?: number            // default: 1 — queries shorter than this never call onServerSearch
+  mergeServerResults?: (base: T[], server: T[]) => T[]  // default: append server results not already present by id
 
   // Height estimation
   containerHeight?: number                  // applied directly to the container's style.height — no need to also set it in your own CSS
@@ -222,6 +224,7 @@ Returns:
 | `observeItem` | `(el: HTMLElement \| null) => void` | Ref callback for each item element |
 | `containerRef` | `RefObject<HTMLDivElement>` | Attach to the scroll container |
 | `getHeightSource` | `(index: number) => HeightSource` | Debug: which layer provided the initial height |
+| `isServerSearching` | `boolean` | True while an `onServerSearch` request is in flight — independent of `search.isSearching` (local index search) |
 
 ### Search options — regex / exact match / whole word / case sensitivity
 
@@ -403,6 +406,27 @@ You can't measure an element that isn't in the DOM, and rendering 10 000 element
 ### Search incremental indexing
 
 The MiniSearch index is built once and only *added to* as new items arrive (e.g. from `onServerSearch`). It is never rebuilt from scratch on every items change — a full rebuild at 5 000 items would block the main thread for tens of milliseconds on each update.
+
+### Server search — design and why it's tree-shakeable
+
+`onServerSearch` is a plain `(query, signal) => Promise<T[]>` callback — there is no `fetch`, HTTP client, or endpoint shape assumed anywhere in this library. You decide what "server" means: REST, GraphQL, a local worker, a mock in tests.
+
+The debounce/cancellation/merge machinery lives entirely in a separate hook, `useServerSearch` (`src/hooks/useServerSearch.ts`), that `useSearchableList` composes in:
+
+- **Debounced** by `serverSearchDebounce` (default 250ms) and gated by `serverSearchMinLength` (default 1) so short/rapid keystrokes don't spam your search function.
+- **Cancellation-aware** — each call gets its own `AbortController`; the previous one is aborted before a new request starts. Pass the `signal` argument to `fetch`/your client to actually cancel network work; if you don't, the hook still protects you via the next point.
+- **Stale-response guard** — every request is tagged with a monotonic id. If a slower earlier request resolves after a newer one already landed, its result is silently dropped, whether or not `signal` is wired up.
+- **Pluggable merge** — `mergeServerResults(base, server)` controls how results combine with local `items`. The default appends server items not already present by `id`; override it to sort, cap the list, or replace instead of append.
+- **Independent loading state** — `isServerSearching` reflects only the server round-trip, so a slow network call doesn't show up as the (synchronous) local `search.isSearching` flag.
+
+Because it's a standalone hook module rather than logic inlined into `useSearchableList`, a bundler that tree-shakes unused exports can drop `useServerSearch`'s code (debounce wiring, `AbortController` plumbing, stale-response bookkeeping) for any consumer that never passes `onServerSearch` — there's no dead branch left sitting in the shipped bundle for the common case of local-only search.
+
+A couple of correctness details worth knowing if you're relying on this closely:
+
+- **Below `serverSearchMinLength`, results are cleared, not just skipped.** If a longer query already merged server results in and you then delete characters below the threshold, those results are dropped immediately rather than lingering until the next qualifying query overwrites them.
+- **Matches/highlights are re-run when `items` changes shape.** When server results (or any other change to `items`, e.g. a custom `mergeServerResults`) alter the list while a query is active, `search.matches` is recomputed automatically — a matching server-fetched item will show up highlighted and be reachable via `nextMatch`/`prevMatch` without waiting for the next keystroke.
+- **IndexedDB eviction runs once per cache config, not once per keystroke.** `cacheTtlMs`-based cleanup is tied to `cacheStoreName`/`cacheTtlMs`, not to `items` — so a burst of server-search merges while typing doesn't trigger a full IndexedDB sweep on every character.
+- **The height-init pass cancels itself if superseded.** If `items` changes again (e.g. a fast second server response) before the server-hints → IndexedDB → Pretext cascade for the previous change finishes, the stale run bails out instead of applying outdated heights or sending a redundant batch to the Pretext worker.
 
 ### How this compares to react-window / react-virtuoso on height estimation
 

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { SearchMatch, SearchOptions, VirtualItem } from '../types'
 import { buildMatchSnippet, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
+import { useMinimapBuckets, nearestBucket } from '../hooks/useMinimapBuckets'
+import { useDragScroll } from '../hooks/useDragScroll'
 
 interface MatchMinimapProps {
   virtualizer: Virtualizer<HTMLDivElement, Element>
@@ -24,12 +26,6 @@ interface MatchMinimapProps {
   snippetContextChars?: number
 }
 
-interface MarkerBucket {
-  key: number
-  top: number
-  matchIndices: number[]
-}
-
 const DEFAULT_TRACK_HEIGHT = 600
 const DEFAULT_MARKER_HEIGHT_PX = 4
 const NAV_KEYS = new Set(['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End'])
@@ -39,16 +35,10 @@ const NAV_KEYS = new Set(['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Ho
  * matches fall across the full (virtualized) list — like the find-in-page
  * minimap in browsers/VSCode.
  *
- * Positions come from each match's real offset in the (possibly virtualized,
- * not-yet-rendered) list, via `virtualizer.getOffsetForIndex` — which is
- * backed by TanStack's measurementsCache, seeded by the Pretext-based height
- * estimate for every item up front and corrected as items are actually
- * measured. So a marker reflects where the match really is, not a generic
- * even spread.
- *
- * Matches are bucketed to the track's actual pixel height so a dense result
- * set renders as a handful of small marks at the right spots instead of one
- * continuous yellow bar covering the whole track.
+ * Bucketing/positioning math lives in `useMinimapBuckets`, and the custom
+ * scrollbar-thumb drag behavior lives in `useDragScroll` — this component
+ * composes both and owns rendering plus keyboard roving-tabindex navigation
+ * and tooltip snippet building.
  *
  * Keyboard: the track is a single Tab stop (roving tabindex) — Arrow
  * Up/Down (or Left/Right) moves between markers, Enter/Space jumps to the
@@ -60,8 +50,6 @@ export function MatchMinimap({
   markerHeightPx = DEFAULT_MARKER_HEIGHT_PX, snippetContextChars,
 }: MatchMinimapProps) {
   const caseSensitive = isHighlightCaseSensitive(searchOptions ?? {})
-  const totalSize = virtualizer.getTotalSize()
-  const itemCount = virtualizer.options.count
   // Stride between bucket centers — taller than the marker itself so adjacent
   // markers always have a visible gap instead of touching/overlapping at the
   // edges (which would also make the lower one unclickable/unhoverable, since
@@ -73,12 +61,6 @@ export function MatchMinimap({
   const [trackHeight, setTrackHeight] = useState(DEFAULT_TRACK_HEIGHT)
   const [hoveredKey, setHoveredKey] = useState<number | null>(null)
   const [focusedKey, setFocusedKey] = useState<number | null>(null)
-  const [viewport, setViewport] = useState({ scrollTop: 0, scrollHeight: 0, clientHeight: 0 })
-  // Mirrors virtualizer.scrollElement into a plain ref so the drag handlers
-  // below read/mutate a DOM node directly instead of a property reached
-  // through `virtualizer` — react-hooks/immutability otherwise flags
-  // `scrollEl.scrollTop = …` as mutating the virtualizer object itself.
-  const scrollElementRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const el = trackRef.current
@@ -91,65 +73,10 @@ export function MatchMinimap({
     return () => ro.disconnect()
   }, [])
 
-  // Dense result sets can fill the whole minimap track with marker ticks,
-  // burying the native (or fully overlaid) scrollbar thumb so there's no
-  // visible handle left to grab. Render our own thumb on top of the markers,
-  // reflecting the scroll container's real viewport, so there's always a
-  // higher-contrast, higher-z-index handle to drag regardless of how many
-  // markers are painted underneath it.
-  useEffect(() => {
-    const scrollEl = virtualizer.scrollElement
-    if (!scrollEl) return
-    scrollElementRef.current = scrollEl
-    const update = () => setViewport({
-      scrollTop: scrollEl.scrollTop,
-      scrollHeight: scrollEl.scrollHeight,
-      clientHeight: scrollEl.clientHeight,
-    })
-    update()
-    scrollEl.addEventListener('scroll', update, { passive: true })
-    const ro = new ResizeObserver(update)
-    ro.observe(scrollEl)
-    return () => {
-      scrollEl.removeEventListener('scroll', update)
-      ro.disconnect()
-    }
-  }, [virtualizer])
+  const { thumb, handleThumbPointerDown, handleThumbPointerMove, handleThumbPointerUp } =
+    useDragScroll(virtualizer, trackHeight)
 
-  const thumb = useMemo(() => {
-    const { scrollTop, scrollHeight, clientHeight } = viewport
-    if (scrollHeight <= 0 || clientHeight <= 0 || scrollHeight <= clientHeight) return null
-    const heightPct = Math.max(4, (clientHeight / scrollHeight) * 100)
-    const maxTopPct = 100 - heightPct
-    const topPct = Math.min(maxTopPct, (scrollTop / (scrollHeight - clientHeight)) * maxTopPct)
-    return { topPct, heightPct }
-  }, [viewport])
-
-  const dragState = useRef<{ startY: number; startScrollTop: number } | null>(null)
-
-  const handleThumbPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    e.stopPropagation()
-    const scrollEl = scrollElementRef.current
-    if (!scrollEl) return
-    dragState.current = { startY: e.clientY, startScrollTop: scrollEl.scrollTop }
-    e.currentTarget.setPointerCapture(e.pointerId)
-  }
-
-  const handleThumbPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const drag = dragState.current
-    const scrollEl = scrollElementRef.current
-    if (!drag || !scrollEl || trackHeight <= 0) return
-    const scrollable = scrollEl.scrollHeight - scrollEl.clientHeight
-    if (scrollable <= 0) return
-    const deltaY = e.clientY - drag.startY
-    const scrollDelta = (deltaY / trackHeight) * scrollEl.scrollHeight
-    scrollEl.scrollTop = Math.min(scrollable, Math.max(0, drag.startScrollTop + scrollDelta))
-  }
-
-  const handleThumbPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    dragState.current = null
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
-  }
+  const buckets = useMinimapBuckets(virtualizer, matches, trackHeight, markerStridePx)
 
   const itemById = useMemo(() => {
     if (!items) return null
@@ -158,44 +85,6 @@ export function MatchMinimap({
     return m
   }, [items])
 
-  const buckets = useMemo<MarkerBucket[]>(() => {
-    if (matches.length === 0 || totalSize <= 0) return []
-
-    // One bucket per marker's own footprint — using a finer resolution than
-    // that would let adjacent markers visually overlap and shadow each other
-    // for hover/click, in addition to looking like one solid bar instead of
-    // distinct rectangles.
-    const resolution = Math.max(1, Math.round(trackHeight / markerStridePx))
-    const byBucket = new Map<number, MarkerBucket>()
-
-    matches.forEach((m, i) => {
-      const offset = virtualizer.getOffsetForIndex
-        ? virtualizer.getOffsetForIndex(m.index, 'start')?.[0]
-        : undefined
-      const top = offset ?? (m.index / Math.max(1, itemCount)) * totalSize
-      const pct = Math.min(100, Math.max(0, (top / totalSize) * 100))
-      const key = Math.round((pct / 100) * resolution)
-      const existing = byBucket.get(key)
-      if (existing) existing.matchIndices.push(i)
-      else byBucket.set(key, { key, top: pct, matchIndices: [i] })
-    })
-
-    // Sorted by position so keyboard up/down and Home/End move spatially
-    // through the track, not in arbitrary match-score order.
-    return Array.from(byBucket.values()).sort((a, b) => a.top - b.top)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matches, totalSize, itemCount, trackHeight, markerStridePx])
-
-  const nearestBucket = (pct: number): MarkerBucket | undefined => {
-    let nearest: MarkerBucket | undefined
-    let bestDist = Infinity
-    for (const b of buckets) {
-      const dist = Math.abs(b.top - pct)
-      if (dist < bestDist) { bestDist = dist; nearest = b }
-    }
-    return nearest
-  }
-
   // Clicking anywhere on the track (not just exactly on a marker) jumps to
   // the closest match — the track represents the full virtualized list, so
   // this works even for matches whose items are nowhere near being rendered.
@@ -203,7 +92,7 @@ export function MatchMinimap({
     if (buckets.length === 0) return
     const rect = e.currentTarget.getBoundingClientRect()
     const pct = rect.height > 0 ? ((e.clientY - rect.top) / rect.height) * 100 : 0
-    const bucket = nearestBucket(Math.min(100, Math.max(0, pct)))
+    const bucket = nearestBucket(buckets, Math.min(100, Math.max(0, pct)))
     if (bucket) onJump(bucket.matchIndices[0])
   }
 

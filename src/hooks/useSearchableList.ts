@@ -1,6 +1,5 @@
 import {
   useRef,
-  useState,
   useEffect,
   useCallback,
   useMemo,
@@ -22,6 +21,7 @@ import { getViewportBucket, parseFontForPretext, hashFontConfig, debounce, EMA, 
 import { bulkGetHeights, setHeight, evictStaleEntries } from '../storage/heightCache'
 import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
 import { WorkerMsg } from '../workers/workerMessages'
+import { useServerSearch } from './useServerSearch'
 
 const PERSIST_DEBOUNCE_MS = 500
 const RESIZE_DEBOUNCE_MS = 200
@@ -92,6 +92,12 @@ export function searchReducer(s: SearchState, a: SearchAction): SearchState {
   }
 }
 
+function defaultMergeServerResults<T extends VirtualItem>(base: T[], server: T[]): T[] {
+  if (server.length === 0) return base
+  const baseIds = new Set(base.map(i => i.id))
+  return [...base, ...server.filter(i => !baseIds.has(i.id))]
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 export function useSearchableList<T extends VirtualItem>(
@@ -103,7 +109,9 @@ export function useSearchableList<T extends VirtualItem>(
     searchFields = ['text'],
     onServerSearch,
     serverSearchDebounce = 250,
+    serverSearchMinLength = 1,
     onSearchError,
+    mergeServerResults = defaultMergeServerResults,
     serverHintMinSamples = 10,
     onMeasureReport,
     cacheStoreName = 'virtual-search-heights',
@@ -121,18 +129,23 @@ export function useSearchableList<T extends VirtualItem>(
   const fontConfigRef  = useRef<FontConfig | null>(null)
   const searchIndexRef = useRef<ReturnType<typeof createSearchIndex> | null>(null)
 
-  const [serverItems, setServerItems] = useState<T[]>([])
+  const { serverItems, isServerSearching, search: runServerSearch, clear: clearServerSearch } =
+    useServerSearch<T>({
+      onServerSearch,
+      debounceMs: serverSearchDebounce,
+      minQueryLength: serverSearchMinLength,
+      onError: onSearchError,
+    })
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0)
   const [searchState, searchDispatch] = useReducer(searchReducer, {
     query: '', matches: [], activeMatchIndex: 0, isSearching: false, options: {},
   })
 
   // ── Items merge ───────────────────────────────────────────────────────────
-  const items = useMemo<T[]>(() => {
-    if (serverItems.length === 0) return baseItems
-    const baseIds = new Set(baseItems.map(i => i.id))
-    return [...baseItems, ...serverItems.filter(i => !baseIds.has(i.id))]
-  }, [baseItems, serverItems])
+  const items = useMemo<T[]>(
+    () => mergeServerResults(baseItems, serverItems),
+    [baseItems, serverItems, mergeServerResults]
+  )
 
   const itemsRef = useRef(items)
   itemsRef.current = items
@@ -241,14 +254,24 @@ export function useSearchableList<T extends VirtualItem>(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // ── Cache eviction — only when the cache config itself changes, not on ────
+  // every items update (server-search merges can churn `items` on every
+  // keystroke; a full IndexedDB sweep on each one would be wasteful).
+  useEffect(() => {
+    evictStaleEntries(cacheStoreName, cacheTtlMs)
+  }, [cacheStoreName, cacheTtlMs])
+
   // ── Height init (server hints → IndexedDB → Pretext) ──────────────────────
   useEffect(() => {
     const container = containerRef.current
     const fc        = fontConfigRef.current
     if (!container || items.length === 0 || !fc) return
 
+    // Superseded (e.g. a fast-typing server-search merge lands mid-flight)
+    // — drop this run's results instead of applying stale heights or
+    // firing a redundant PREPARE_BATCH for ids the newer run already covers.
+    let cancelled = false
     const bucket = getViewportBucket(container.clientWidth)
-    evictStaleEntries(cacheStoreName, cacheTtlMs)
 
     ;(async () => {
       for (const item of items) {
@@ -258,23 +281,27 @@ export function useSearchableList<T extends VirtualItem>(
             heightStoreRef.current.set(item.id, hint.p50, 'server', item.type)
         }
       }
+      if (cancelled) return
 
       const needIds = items.filter(i => !heightStoreRef.current.has(i.id)).map(i => i.id)
       if (needIds.length > 0) {
         const cached = await bulkGetHeights(needIds, bucket, fc.hash, cacheStoreName, cacheTtlMs)
+        if (cancelled) return
         for (const [id, h] of cached) heightStoreRef.current.set(id, h, 'indexeddb')
       }
 
       const pretextItems = items
         .filter(i => !heightStoreRef.current.has(i.id))
         .map(i => ({ id: i.id, text: i.text }))
-      if (pretextItems.length > 0 && workerRef.current) {
+      if (!cancelled && pretextItems.length > 0 && workerRef.current) {
         workerRef.current.postMessage({
           type: WorkerMsg.PREPARE_BATCH, items: pretextItems,
           font: fc.font, containerWidth: container.clientWidth, lineHeight: fc.lineHeight,
         })
       }
     })()
+
+    return () => { cancelled = true }
   }, [items, cacheStoreName, serverHintMinSamples, cacheTtlMs])
 
   // ── Container resize → Pretext re-layout ─────────────────────────────────
@@ -308,19 +335,6 @@ export function useSearchableList<T extends VirtualItem>(
     }
   }, [items, searchFields])
 
-  // ── Server search (optional) ──────────────────────────────────────────────
-  const debouncedServerSearch = useMemo(() =>
-    debounce(async (query: string) => {
-      if (!onServerSearch || !query.trim()) return
-      try {
-        const results = await onServerSearch(query)
-        setServerItems(results)
-      } catch (error) {
-        onSearchError?.(error)
-      }
-    }, serverSearchDebounce),
-  [onServerSearch, serverSearchDebounce, onSearchError])
-
   // ── setQuery ──────────────────────────────────────────────────────────────
   const runSearch = useCallback((query: string, options: SearchOptions) => {
     if (!query.trim()) {
@@ -340,15 +354,25 @@ export function useSearchableList<T extends VirtualItem>(
   const setQuery = useCallback((query: string) => {
     searchDispatch({ type: 'SET_QUERY', query })
     runSearch(query, searchState.options)
-    if (!query.trim()) setServerItems([])
-    else debouncedServerSearch(query)
-  }, [runSearch, searchState.options, debouncedServerSearch])
+    if (!query.trim()) clearServerSearch()
+    else runServerSearch(query)
+  }, [runSearch, searchState.options, runServerSearch, clearServerSearch])
 
   const setSearchOptions = useCallback((options: Partial<SearchOptions>) => {
     const next = { ...searchState.options, ...options }
     searchDispatch({ type: 'SET_OPTIONS', options: next })
     runSearch(searchState.query, next)
   }, [searchState.options, searchState.query, runSearch])
+
+  // ── Re-run the active query when `items` changes shape ────────────────────
+  // Covers server results merging in (or a custom mergeServerResults
+  // reordering items): the MiniSearch index gets new entries above, but
+  // without this, matches/highlights for those entries wouldn't appear
+  // until the next keystroke.
+  useEffect(() => {
+    if (searchState.query.trim()) runSearch(searchState.query, searchState.options)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items])
 
   // ── Navigate matches ──────────────────────────────────────────────────────
   const correctionRafRef = useRef<number | null>(null)
@@ -441,5 +465,6 @@ export function useSearchableList<T extends VirtualItem>(
     observeItem,
     containerRef: containerRef as RefObject<HTMLDivElement>,
     getHeightSource,
+    isServerSearching,
   }
 }
