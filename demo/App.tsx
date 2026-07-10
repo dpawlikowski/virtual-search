@@ -5,90 +5,13 @@ import { SearchBar } from '../src/components/SearchBar'
 import { MatchMinimap } from '../src/components/MatchMinimap'
 import { HighlightedText } from '../src/components/HighlightedText'
 import type { VirtualItem, MatchRange } from '../src/types'
+import {
+  EMAIL_ITEMS, NEWS_ITEMS, EMAIL_COUNT, NEWS_COUNT,
+  EMAIL_ROW_HEIGHT, NEWS_ROW_HEIGHT, formatCount,
+  type EmailItem, type NewsItem,
+} from './data'
 import '../src/styles.css'
 import './demo.css'
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface EmailItem extends VirtualItem {
-  subject: string; from: string; preview: string; date: string; unread: boolean
-}
-
-interface NewsItem extends VirtualItem {
-  headline: string; source: string; category: string; body: string; date: string
-}
-
-// ─── Data ─────────────────────────────────────────────────────────────────────
-
-const SENDERS = ['Alice Johnson', 'Bob Martinez', 'Carol White', 'David Kim', 'Eva Nowak', 'Frank Zhang', 'Grace Okonkwo', 'Hans Müller']
-const SUBJECTS = [
-  'Weekly engineering sync — agenda attached',
-  'Re: Q3 performance review cycle starts Monday',
-  'Action required: update your 2FA before Friday',
-  'Ship it Friday — release notes draft for review',
-  'Design review feedback on the new onboarding flow',
-  'Incident post-mortem: database connection pool exhaustion',
-  'Welcome to the team — your access has been provisioned',
-  'RFC: proposal for adopting TanStack Query across all frontends',
-  'Bug report: search returns empty results for CJK queries',
-  'Can we sync this week about the roadmap?',
-]
-const BODIES = [
-  'I wanted to follow up on our conversation from last week regarding the architecture decision. After reviewing the options, I believe the approach using server-side rendering with hydration will serve our performance goals better than a pure client-side solution.',
-  "Thanks for sending this over. I reviewed the attached document and have a few comments. The main concern is around the timeline — three weeks feels tight given the current team capacity. Can we discuss this in Thursday's planning session?",
-  "Quick note to confirm that the deployment went smoothly. All health checks are passing and error rates are nominal. I'll keep an eye on latency metrics through the end of the day.",
-  "The test suite is now green after fixing the race condition in the auth middleware. The root cause was a missing await in the session refresh logic. I've added a regression test.",
-  "As discussed in the RFC, I'm proposing we standardize on a single state management pattern across the frontend apps. Right now we have three different approaches which makes it hard to onboard.",
-]
-
-const EMAIL_ITEMS: EmailItem[] = Array.from({ length: 5000 }, (_, i) => {
-  const subject = SUBJECTS[i % SUBJECTS.length]
-  const from = SENDERS[i % SENDERS.length]
-  const body = BODIES[i % BODIES.length]
-  const date = new Date(Date.now() - Math.floor(i / 3) * 86400000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-  return {
-    id: `email-${i}`,
-    text: `${subject} ${from} ${body}`,
-    type: 'email',
-    subject, from, preview: body.slice(0, 130) + '…', date, unread: i % 4 === 0,
-  }
-})
-
-const NEWS_SOURCES = ['TechCrunch', 'The Verge', 'Hacker News', 'Ars Technica', 'Wired']
-const NEWS_CATEGORIES = ['AI', 'Security', 'Open Source', 'Web Dev', 'Cloud', 'Mobile']
-const NEWS_HEADLINES = [
-  'New language model achieves state-of-the-art results on reasoning benchmarks',
-  'Critical vulnerability found in widely-used authentication library',
-  'Open source alternative to popular SaaS tool reaches 10k GitHub stars',
-  'WebAssembly 2.0 brings garbage collection and exception handling to browsers',
-  'Major cloud provider announces 30% price reduction on compute instances',
-  'Study shows 40% of developers use AI assistants for more than half their coding',
-  'TypeScript 6.0 proposal: full type-level computation without escape hatches',
-  'New CSS feature enables container queries for responsive component design',
-  'Rust adoption in Linux kernel reaches 500,000 lines of production code',
-  'Privacy-preserving federated learning paper accepted at NeurIPS',
-]
-const NEWS_BODIES = [
-  'Researchers published findings showing dramatic improvements over previous approaches. The new method reduces computational requirements by an order of magnitude while maintaining accuracy, opening the door for edge deployment.',
-  'Security researchers discovered the flaw during a routine audit. The vulnerability allows unauthenticated remote code execution and affects all versions prior to 3.2.1. Users are urged to update immediately.',
-  'The project, which began as a weekend experiment, has attracted contributions from over 200 developers across 30 countries. The maintainers credit the permissive license and excellent documentation for rapid adoption.',
-  'The specification committee reached consensus after months of debate. Browser vendors have committed to shipping support within two major release cycles, with polyfills available for older targets.',
-  'The pricing change takes effect next quarter and applies to all regions. Analysts expect competitors to respond with similar reductions, potentially accelerating cloud migration projects.',
-]
-
-const NEWS_ITEMS: NewsItem[] = Array.from({ length: 3000 }, (_, i) => {
-  const headline = NEWS_HEADLINES[i % NEWS_HEADLINES.length]
-  const source = NEWS_SOURCES[i % NEWS_SOURCES.length]
-  const category = NEWS_CATEGORIES[i % NEWS_CATEGORIES.length]
-  const body = NEWS_BODIES[i % NEWS_BODIES.length]
-  const date = new Date(Date.now() - Math.floor(i / 5) * 3600000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-  return {
-    id: `news-${i}`,
-    text: `${headline} ${source} ${category} ${body}`,
-    type: 'news',
-    headline, source, category, body, date,
-  }
-})
 
 // ─── Shared ───────────────────────────────────────────────────────────────────
 
@@ -131,7 +54,7 @@ interface EmailListProps {
 
 function EmailList({ visible, inputRef, onClose }: EmailListProps) {
   const { items, virtualizer, search, setQuery, setSearchOptions, nextMatch, prevMatch, goToMatch, getHighlights, getIsActiveMatch, observeItem, containerRef, getHeightSource } =
-    useSearchableList<EmailItem>({ items: EMAIL_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['text'], defaultItemHeight: 96 })
+    useSearchableList<EmailItem>({ items: EMAIL_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['text'], defaultItemHeight: EMAIL_ROW_HEIGHT })
 
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -201,7 +124,7 @@ interface NewsListProps {
 
 function NewsList({ visible, inputRef, onClose }: NewsListProps) {
   const { items, virtualizer, search, setQuery, setSearchOptions, nextMatch, prevMatch, goToMatch, getHighlights, getIsActiveMatch, observeItem, containerRef, getHeightSource } =
-    useSearchableList<NewsItem>({ items: NEWS_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['text'], defaultItemHeight: 120 })
+    useSearchableList<NewsItem>({ items: NEWS_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['text'], defaultItemHeight: NEWS_ROW_HEIGHT })
 
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -278,7 +201,7 @@ export default function App() {
       <header className="demo__header">
         <div className="demo__title">
           <h1>virtual-search</h1>
-          <span className="demo__badge">{tab === 'emails' ? '5 000 emails' : '3 000 articles'}</span>
+          <span className="demo__badge">{tab === 'emails' ? `${formatCount(EMAIL_COUNT)} emails` : `${formatCount(NEWS_COUNT)} articles`}</span>
         </div>
         <p className="demo__sub">Virtualized list · hybrid height estimation · full-text search · scroll-to-match</p>
         <p className="demo__hint">

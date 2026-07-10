@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 
+/** Smallest thumb height (as % of track) so it stays grabbable in very long lists. */
+const MIN_THUMB_HEIGHT_PCT = 4
+/** A full track, in percent — the ceiling for the thumb's vertical travel. */
+const FULL_TRACK_PCT = 100
+
 export interface ThumbMetrics {
   topPct: number
   heightPct: number
@@ -38,8 +43,14 @@ export function useDragScroll(
   const scrollElementRef = useRef<HTMLElement | null>(null)
   const dragState = useRef<{ startY: number; startScrollTop: number } | null>(null)
 
+  // Key the subscription on the scroll element itself, not the whole
+  // `virtualizer`. The element is what we actually observe, and it may attach
+  // after the first render (once the DOM mounts) while the virtualizer
+  // instance stays stable — so `[virtualizer]` could miss it. Depending on the
+  // element also makes this immune to an unstable `virtualizer` prop, which
+  // would otherwise re-run the effect every render and spin `setViewport`.
+  const scrollEl = virtualizer.scrollElement
   useEffect(() => {
-    const scrollEl = virtualizer.scrollElement
     if (!scrollEl) return
     scrollElementRef.current = scrollEl
     const update = () => setViewport({
@@ -55,13 +66,13 @@ export function useDragScroll(
       scrollEl.removeEventListener('scroll', update)
       ro.disconnect()
     }
-  }, [virtualizer])
+  }, [scrollEl])
 
   const thumb = useMemo<ThumbMetrics | null>(() => {
     const { scrollTop, scrollHeight, clientHeight } = viewport
     if (scrollHeight <= 0 || clientHeight <= 0 || scrollHeight <= clientHeight) return null
-    const heightPct = Math.max(4, (clientHeight / scrollHeight) * 100)
-    const maxTopPct = 100 - heightPct
+    const heightPct = Math.max(MIN_THUMB_HEIGHT_PCT, (clientHeight / scrollHeight) * FULL_TRACK_PCT)
+    const maxTopPct = FULL_TRACK_PCT - heightPct
     const topPct = Math.min(maxTopPct, (scrollTop / (scrollHeight - clientHeight)) * maxTopPct)
     return { topPct, heightPct }
   }, [viewport])

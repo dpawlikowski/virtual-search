@@ -11,61 +11,32 @@ import type {
   VirtualItem,
   UseSearchableListOptions,
   UseSearchableListReturn,
-  HeightSource,
   SearchState,
   SearchOptions,
   MatchRange,
-  FontConfig,
 } from '../types'
-import { getViewportBucket, parseFontForPretext, hashFontConfig, debounce, EMA, isDevEnvironment } from '../utils'
-import { bulkGetHeights, setHeight, evictStaleEntries } from '../storage/heightCache'
+import { EMA_DEFAULT_FALLBACK } from '../utils'
 import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
-import { WorkerMsg } from '../workers/workerMessages'
 import { useServerSearch } from './useServerSearch'
+import { useHeightCache, HeightStore } from './useHeightCache'
 
-const PERSIST_DEBOUNCE_MS = 500
-const RESIZE_DEBOUNCE_MS = 200
-const VIRTUALIZER_OVERSCAN = 4
-// ^ defaults for UseSearchableListOptions.persistDebounceMs / resizeDebounceMs / overscan
+// Re-exported for consumers that construct their own estimate store.
+export { HeightStore }
 
-// ─── HeightStore — provides INITIAL estimates only ───────────────────────────
-// Runtime measurement is owned entirely by TanStack Virtual's measureElement.
-// This store seeds estimateSize before items are rendered (Pretext / IndexedDB).
+// ─── Option defaults ────────────────────────────────────────────────────────
+const DEFAULT_SERVER_SEARCH_DEBOUNCE_MS = 250
+const DEFAULT_SERVER_SEARCH_MIN_LENGTH = 1
+const DEFAULT_SERVER_HINT_MIN_SAMPLES = 10
+const DEFAULT_PERSIST_DEBOUNCE_MS = 500
+const DEFAULT_RESIZE_DEBOUNCE_MS = 200
+const DEFAULT_VIRTUALIZER_OVERSCAN = 4
+const DEFAULT_SEARCH_FIELDS = ['text']
+const DEFAULT_CACHE_STORE_NAME = 'virtual-search-heights'
+const DEFAULT_SCROLL_ALIGN = 'center' as const
 
-export class HeightStore {
-  private entries = new Map<string, { height: number; source: HeightSource }>()
-  private emaByType = new Map<string, EMA>()
-  private globalEma = new EMA(0.1)
-  readonly defaultHeight: number
-
-  constructor(defaultHeight: number) { this.defaultHeight = defaultHeight }
-
-  private ema(type?: string): EMA {
-    if (!type) return this.globalEma
-    if (!this.emaByType.has(type)) this.emaByType.set(type, new EMA(0.1))
-    return this.emaByType.get(type)!
-  }
-
-  set(id: string, height: number, source: HeightSource, type?: string) {
-    this.entries.set(id, { height, source })
-    if (source !== 'default' && source !== 'ema') {
-      this.globalEma.update(height)
-      if (type) this.ema(type).update(height)
-    }
-  }
-
-  getHeight(id: string, type?: string): number {
-    const e = this.entries.get(id)
-    if (e) return e.height
-    const ema = this.ema(type)
-    return ema.ready ? ema.current : this.defaultHeight
-  }
-
-  getSource(id: string): HeightSource {
-    return this.entries.get(id)?.source ?? 'default'
-  }
-
-  has(id: string) { return this.entries.has(id) }
+/** Minimal view of the virtualizer needed to re-measure after async height updates. */
+interface Remeasurable {
+  measure: () => void
 }
 
 // ─── Search reducer ───────────────────────────────────────────────────────────
@@ -106,28 +77,24 @@ export function useSearchableList<T extends VirtualItem>(
   const {
     items: baseItems,
     containerHeight,
-    searchFields = ['text'],
+    searchFields = DEFAULT_SEARCH_FIELDS,
     onServerSearch,
-    serverSearchDebounce = 250,
-    serverSearchMinLength = 1,
+    serverSearchDebounce = DEFAULT_SERVER_SEARCH_DEBOUNCE_MS,
+    serverSearchMinLength = DEFAULT_SERVER_SEARCH_MIN_LENGTH,
     onSearchError,
     mergeServerResults = defaultMergeServerResults,
-    serverHintMinSamples = 10,
+    serverHintMinSamples = DEFAULT_SERVER_HINT_MIN_SAMPLES,
     onMeasureReport,
-    cacheStoreName = 'virtual-search-heights',
-    defaultItemHeight = 150,
+    cacheStoreName = DEFAULT_CACHE_STORE_NAME,
+    defaultItemHeight = EMA_DEFAULT_FALLBACK,
     cacheTtlMs,
-    scrollAlign = 'center',
-    persistDebounceMs = PERSIST_DEBOUNCE_MS,
-    resizeDebounceMs = RESIZE_DEBOUNCE_MS,
-    overscan = VIRTUALIZER_OVERSCAN,
+    scrollAlign = DEFAULT_SCROLL_ALIGN,
+    persistDebounceMs = DEFAULT_PERSIST_DEBOUNCE_MS,
+    resizeDebounceMs = DEFAULT_RESIZE_DEBOUNCE_MS,
+    overscan = DEFAULT_VIRTUALIZER_OVERSCAN,
   } = options
 
-  const containerRef   = useRef<HTMLDivElement>(null)
-  const workerRef      = useRef<Worker | null>(null)
-  const heightStoreRef = useRef(new HeightStore(defaultItemHeight))
-  const fontConfigRef  = useRef<FontConfig | null>(null)
-  const searchIndexRef = useRef<ReturnType<typeof createSearchIndex> | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const { serverItems, isServerSearching, search: runServerSearch, clear: clearServerSearch } =
     useServerSearch<T>({
@@ -169,17 +136,28 @@ export function useSearchableList<T extends VirtualItem>(
     return m
   }, [searchState.matches])
 
-  // ── Persist measured heights to IndexedDB (debounced) ─────────────────────
-  const persistHeight = useMemo(() =>
-    debounce((id: string, h: number) => {
-      const fc = fontConfigRef.current
-      const container = containerRef.current
-      if (!fc) return
-      const bucket = getViewportBucket(container?.clientWidth ?? 800)
-      setHeight(id, h, bucket, fc.hash, cacheStoreName)
-      onMeasureReport?.(id, h, bucket)
-    }, persistDebounceMs),
-  [cacheStoreName, onMeasureReport, persistDebounceMs])
+  // ── Height estimation (server hints → IndexedDB → Pretext worker) ─────────
+  // Re-measure the virtualizer whenever async heights land. `virtualizerRef`
+  // breaks the ordering cycle: the cache is created before the virtualizer,
+  // but only ever calls back after mount, once the ref is populated.
+  const virtualizerRef = useRef<Remeasurable | null>(null)
+  const onHeightsReady = useCallback(() => {
+    virtualizerRef.current?.measure()
+    forceUpdate()
+  }, [])
+
+  const { heightStoreRef, observeItem: persistMeasuredHeight, getHeightSource } = useHeightCache<T>({
+    containerRef,
+    items,
+    defaultItemHeight,
+    cacheStoreName,
+    cacheTtlMs,
+    serverHintMinSamples,
+    persistDebounceMs,
+    resizeDebounceMs,
+    onMeasureReport,
+    onHeightsReady,
+  })
 
   // ── Virtualizer ───────────────────────────────────────────────────────────
   const virtualizer = useVirtualizer({
@@ -188,29 +166,17 @@ export function useSearchableList<T extends VirtualItem>(
     estimateSize: useCallback((i: number) => {
       const item = itemsRef.current[i]
       return heightStoreRef.current.getHeight(item?.id ?? '', item?.type)
-    }, []),
+    }, [heightStoreRef]),
     overscan,
   })
+  virtualizerRef.current = virtualizer
 
-  // ── Item ref — wires TanStack measurement + persists to cache ─────────────
+  // ── Item ref — wires TanStack measurement, then persists to the cache ─────
   const observeItem = useCallback((el: HTMLElement | null) => {
     if (!el) return
     virtualizer.measureElement(el)
-    const id = el.dataset.vsItemId
-    if (id) {
-      const h = el.getBoundingClientRect().height
-      if (h > 0) {
-        heightStoreRef.current.set(id, h, 'indexeddb', el.dataset.vsItemType)
-        persistHeight(id, h)
-      }
-    } else if (isDevEnvironment()) {
-      console.warn(
-        '[virtual-search] observeItem: element is missing data-vs-item-id — its measured height ' +
-        'will not persist to the cache and search navigation to this item may misbehave. ' +
-        'Add data-vs-item-id={item.id} to the item element.'
-      )
-    }
-  }, [virtualizer, persistHeight])
+    persistMeasuredHeight(el)
+  }, [virtualizer, persistMeasuredHeight])
 
   // ── Apply containerHeight, if provided ────────────────────────────────────
   useEffect(() => {
@@ -219,108 +185,8 @@ export function useSearchableList<T extends VirtualItem>(
     el.style.height = `${containerHeight}px`
   }, [containerHeight])
 
-  // ── Font resolution ───────────────────────────────────────────────────────
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const cs    = getComputedStyle(el)
-    const fsz   = cs.fontSize || '16px'
-    const ff    = cs.fontFamily || 'Inter'
-    const lhRaw = cs.lineHeight
-    const lh    = lhRaw === 'normal' ? parseFloat(fsz) * 1.5 : parseFloat(lhRaw) || 24
-    const font  = parseFontForPretext(`${fsz} ${ff}`)
-    fontConfigRef.current = { font, lineHeight: lh, hash: hashFontConfig(font, lh) }
-  }, [])
-
-  // ── Pretext Worker ────────────────────────────────────────────────────────
-  useEffect(() => {
-    const w = new Worker(new URL('../workers/pretext.worker.ts', import.meta.url), { type: 'module' })
-    workerRef.current = w
-    w.onmessage = (e: MessageEvent<{ type: string; heights: [string, number][] }>) => {
-      if (e.data.type !== WorkerMsg.HEIGHTS_READY) return
-      let updated = false
-      for (const [id, height] of e.data.heights) {
-        if (!heightStoreRef.current.has(id)) {
-          heightStoreRef.current.set(id, height, 'pretext')
-          updated = true
-        }
-      }
-      if (updated) {
-        virtualizer.measure()
-        forceUpdate()
-      }
-    }
-    return () => { w.terminate(); workerRef.current = null }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // ── Cache eviction — only when the cache config itself changes, not on ────
-  // every items update (server-search merges can churn `items` on every
-  // keystroke; a full IndexedDB sweep on each one would be wasteful).
-  useEffect(() => {
-    evictStaleEntries(cacheStoreName, cacheTtlMs)
-  }, [cacheStoreName, cacheTtlMs])
-
-  // ── Height init (server hints → IndexedDB → Pretext) ──────────────────────
-  useEffect(() => {
-    const container = containerRef.current
-    const fc        = fontConfigRef.current
-    if (!container || items.length === 0 || !fc) return
-
-    // Superseded (e.g. a fast-typing server-search merge lands mid-flight)
-    // — drop this run's results instead of applying stale heights or
-    // firing a redundant PREPARE_BATCH for ids the newer run already covers.
-    let cancelled = false
-    const bucket = getViewportBucket(container.clientWidth)
-
-    ;(async () => {
-      for (const item of items) {
-        if (!heightStoreRef.current.has(item.id)) {
-          const hint = item._hints?.[bucket]
-          if (hint && hint.n >= serverHintMinSamples)
-            heightStoreRef.current.set(item.id, hint.p50, 'server', item.type)
-        }
-      }
-      if (cancelled) return
-
-      const needIds = items.filter(i => !heightStoreRef.current.has(i.id)).map(i => i.id)
-      if (needIds.length > 0) {
-        const cached = await bulkGetHeights(needIds, bucket, fc.hash, cacheStoreName, cacheTtlMs)
-        if (cancelled) return
-        for (const [id, h] of cached) heightStoreRef.current.set(id, h, 'indexeddb')
-      }
-
-      const pretextItems = items
-        .filter(i => !heightStoreRef.current.has(i.id))
-        .map(i => ({ id: i.id, text: i.text }))
-      if (!cancelled && pretextItems.length > 0 && workerRef.current) {
-        workerRef.current.postMessage({
-          type: WorkerMsg.PREPARE_BATCH, items: pretextItems,
-          font: fc.font, containerWidth: container.clientWidth, lineHeight: fc.lineHeight,
-        })
-      }
-    })()
-
-    return () => { cancelled = true }
-  }, [items, cacheStoreName, serverHintMinSamples, cacheTtlMs])
-
-  // ── Container resize → Pretext re-layout ─────────────────────────────────
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-    const onResize = debounce(() => {
-      const fc = fontConfigRef.current
-      if (!fc || !workerRef.current) return
-      workerRef.current.postMessage({
-        type: WorkerMsg.LAYOUT_RESIZE, containerWidth: container.clientWidth, lineHeight: fc.lineHeight,
-      })
-    }, resizeDebounceMs)
-    const ro = new ResizeObserver(onResize)
-    ro.observe(container)
-    return () => ro.disconnect()
-  }, [resizeDebounceMs])
-
   // ── Search index — incremental, never full rebuild ────────────────────────
+  const searchIndexRef = useRef<ReturnType<typeof createSearchIndex> | null>(null)
   const indexedIdsRef = useRef(new Set<string>())
   useEffect(() => {
     if (searchIndexRef.current === null) {
@@ -444,11 +310,6 @@ export function useSearchableList<T extends VirtualItem>(
   const getIsActiveMatch = useCallback(
     (itemId: string) => matchActiveMap.get(itemId) === searchState.activeMatchIndex,
     [matchActiveMap, searchState.activeMatchIndex]
-  )
-
-  const getHeightSource = useCallback(
-    (idx: number): HeightSource => heightStoreRef.current.getSource(items[idx]?.id ?? ''),
-    [items]
   )
 
   return {

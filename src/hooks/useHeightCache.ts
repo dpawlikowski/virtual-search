@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from 'react'
-import type { VirtualItem, HeightSource, FontConfig } from '../types'
+import type { VirtualItem, HeightSource, FontConfig, ViewportBucket } from '../types'
 import { getViewportBucket, parseFontForPretext, hashFontConfig, debounce, EMA, isDevEnvironment } from '../utils'
 import { bulkGetHeights, setHeight, evictStaleEntries } from '../storage/heightCache'
 import { WorkerMsg } from '../workers/workerMessages'
+
+/** Container width assumed before the element has mounted / been measured. */
+const FALLBACK_CONTAINER_WIDTH_PX = 800
+/** CSS font fallbacks used when a computed value is unavailable (e.g. jsdom). */
+const FALLBACK_FONT_SIZE = '16px'
+const FALLBACK_FONT_FAMILY = 'Inter'
+/** Multiplier applied to font-size when `line-height` computes to `normal`. */
+const NORMAL_LINE_HEIGHT_RATIO = 1.5
+/** Line height assumed when neither `line-height` nor font-size can be parsed. */
+const FALLBACK_LINE_HEIGHT_PX = 24
 
 // ─── HeightStore — provides INITIAL estimates only ───────────────────────────
 // Runtime measurement is owned entirely by TanStack Virtual's measureElement.
@@ -11,14 +21,14 @@ import { WorkerMsg } from '../workers/workerMessages'
 export class HeightStore {
   private entries = new Map<string, { height: number; source: HeightSource }>()
   private emaByType = new Map<string, EMA>()
-  private globalEma = new EMA(0.1)
+  private globalEma = new EMA()
   readonly defaultHeight: number
 
   constructor(defaultHeight: number) { this.defaultHeight = defaultHeight }
 
   private ema(type?: string): EMA {
     if (!type) return this.globalEma
-    if (!this.emaByType.has(type)) this.emaByType.set(type, new EMA(0.1))
+    if (!this.emaByType.has(type)) this.emaByType.set(type, new EMA())
     return this.emaByType.get(type)!
   }
 
@@ -53,7 +63,7 @@ export interface UseHeightCacheOptions<T extends VirtualItem> {
   serverHintMinSamples: number
   persistDebounceMs: number
   resizeDebounceMs: number
-  onMeasureReport?: (id: string, height: number, bucket: string) => void
+  onMeasureReport?: (id: string, height: number, bucket: ViewportBucket) => void
   /**
    * Called after new heights land from the Pretext worker (i.e. the caller
    * should re-measure the virtualizer and force a re-render). Read from a
@@ -63,7 +73,7 @@ export interface UseHeightCacheOptions<T extends VirtualItem> {
   onHeightsReady: () => void
 }
 
-export interface UseHeightCacheReturn<T extends VirtualItem> {
+export interface UseHeightCacheReturn {
   heightStoreRef: RefObject<HeightStore>
   /** Records a rendered item's measured height into the store and schedules
    *  a debounced persist to IndexedDB. Does NOT call virtualizer.measureElement
@@ -80,7 +90,7 @@ export interface UseHeightCacheReturn<T extends VirtualItem> {
  */
 export function useHeightCache<T extends VirtualItem>(
   options: UseHeightCacheOptions<T>
-): UseHeightCacheReturn<T> {
+): UseHeightCacheReturn {
   const {
     containerRef, items, defaultItemHeight, cacheStoreName, cacheTtlMs,
     serverHintMinSamples, persistDebounceMs, resizeDebounceMs, onMeasureReport, onHeightsReady,
@@ -90,20 +100,23 @@ export function useHeightCache<T extends VirtualItem>(
   const heightStoreRef = useRef(new HeightStore(defaultItemHeight))
   const fontConfigRef = useRef<FontConfig | null>(null)
 
+  // Kept in a ref so the Pretext worker's `onmessage` always calls the latest
+  // callback without re-subscribing the worker every render.
   const onHeightsReadyRef = useRef(onHeightsReady)
-  onHeightsReadyRef.current = onHeightsReady
+  useEffect(() => {
+    onHeightsReadyRef.current = onHeightsReady
+  })
 
   // ── Persist measured heights to IndexedDB (debounced) ─────────────────────
+  // The viewport bucket and font hash are resolved by the caller (`observeItem`)
+  // and passed in, so this debounced writer captures no refs — the current
+  // container width/font is read at measure time, not persist time.
   const persistHeight = useMemo(() =>
-    debounce((id: string, h: number) => {
-      const fc = fontConfigRef.current
-      const container = containerRef.current
-      if (!fc) return
-      const bucket = getViewportBucket(container?.clientWidth ?? 800)
-      setHeight(id, h, bucket, fc.hash, cacheStoreName)
+    debounce((id: string, h: number, bucket: ViewportBucket, fontHash: string) => {
+      setHeight(id, h, bucket, fontHash, cacheStoreName)
       onMeasureReport?.(id, h, bucket)
     }, persistDebounceMs),
-  [cacheStoreName, onMeasureReport, persistDebounceMs, containerRef])
+  [cacheStoreName, onMeasureReport, persistDebounceMs])
 
   // ── Item ref — persists measured heights to the store + cache ─────────────
   // (Wiring virtualizer.measureElement itself stays with the caller, which
@@ -115,7 +128,11 @@ export function useHeightCache<T extends VirtualItem>(
       const h = el.getBoundingClientRect().height
       if (h > 0) {
         heightStoreRef.current.set(id, h, 'indexeddb', el.dataset.vsItemType)
-        persistHeight(id, h)
+        const fc = fontConfigRef.current
+        if (fc) {
+          const bucket = getViewportBucket(containerRef.current?.clientWidth ?? FALLBACK_CONTAINER_WIDTH_PX)
+          persistHeight(id, h, bucket, fc.hash)
+        }
       }
     } else if (isDevEnvironment()) {
       console.warn(
@@ -131,10 +148,12 @@ export function useHeightCache<T extends VirtualItem>(
     const el = containerRef.current
     if (!el) return
     const cs    = getComputedStyle(el)
-    const fsz   = cs.fontSize || '16px'
-    const ff    = cs.fontFamily || 'Inter'
+    const fsz   = cs.fontSize || FALLBACK_FONT_SIZE
+    const ff    = cs.fontFamily || FALLBACK_FONT_FAMILY
     const lhRaw = cs.lineHeight
-    const lh    = lhRaw === 'normal' ? parseFloat(fsz) * 1.5 : parseFloat(lhRaw) || 24
+    const lh    = lhRaw === 'normal'
+      ? parseFloat(fsz) * NORMAL_LINE_HEIGHT_RATIO
+      : parseFloat(lhRaw) || FALLBACK_LINE_HEIGHT_PX
     const font  = parseFontForPretext(`${fsz} ${ff}`)
     fontConfigRef.current = { font, lineHeight: lh, hash: hashFontConfig(font, lh) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
