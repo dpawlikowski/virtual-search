@@ -124,7 +124,7 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
     const { containerWidth = DEFAULT_CONTAINER_WIDTH, lineHeight = DEFAULT_LINE_HEIGHT } = e.data
 
     if (!pretextModule || preparedCache.size === 0) {
-      self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights: [] })
+      self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights: [], replace: true })
       return
     }
 
@@ -137,6 +137,8 @@ self.onmessage = async (e: MessageEvent<WorkerMessage>) => {
         // skip — old value remains in heightStore
       }
     }
-    self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights })
+    // `replace: true` — a resize recomputes heights for already-measured items,
+    // so the consumer must overwrite existing entries rather than keep the stale ones.
+    self.postMessage({ type: WorkerMsg.HEIGHTS_READY, heights, replace: true })
   }
 }

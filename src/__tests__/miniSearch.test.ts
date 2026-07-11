@@ -147,3 +147,19 @@ describe('terms end-to-end', () => {
     expect(items[2].text.slice(r.start, r.end).toLowerCase()).toContain('typescript')
   })
 })
+
+describe('index eviction (relied on by useSearchableList to avoid unbounded growth)', () => {
+  it('discardAll removes documents from results and permits the id to be re-added', () => {
+    const idx = createSearchIndex(items, ['text'])
+    expect(idx.search('quick').map(r => r.id)).toContain('1')
+
+    // Wholesale page swap evicts the old ids so the index does not leak.
+    idx.discardAll(['1'])
+    expect(idx.search('quick').map(r => r.id)).not.toContain('1')
+
+    // A later page may re-introduce the same id — re-adding a discarded id must
+    // not throw a duplicate-ID error and must be searchable again.
+    expect(() => idx.add({ id: '1', text: 'a quick reintroduction' })).not.toThrow()
+    expect(idx.search('quick').map(r => r.id)).toContain('1')
+  })
+})

@@ -194,6 +194,20 @@ export function useSearchableList<T extends VirtualItem>(
       indexedIdsRef.current = new Set(items.map(i => i.id))
       return
     }
+    // Evict ids that are no longer present (e.g. a wholesale page swap, not an
+    // append). Without this the MiniSearch index grows unbounded over a session
+    // and its fuzzy/IDF scoring is skewed by long-gone documents. `discardAll`
+    // removes by id lazily (auto-vacuumed) and allows the id to be re-added later.
+    const currentIds = new Set(items.map(i => i.id))
+    const removed: string[] = []
+    indexedIdsRef.current.forEach(id => {
+      if (!currentIds.has(id)) removed.push(id)
+    })
+    if (removed.length > 0) {
+      searchIndexRef.current.discardAll(removed)
+      removed.forEach(id => indexedIdsRef.current.delete(id))
+    }
+
     const fresh = items.filter(i => !indexedIdsRef.current.has(i.id)) as VirtualItem[]
     if (fresh.length > 0) {
       searchIndexRef.current.addAll(fresh)

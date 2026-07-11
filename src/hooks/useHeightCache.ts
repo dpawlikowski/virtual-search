@@ -163,11 +163,16 @@ export function useHeightCache<T extends VirtualItem>(
   useEffect(() => {
     const w = new Worker(new URL('../workers/pretext.worker.ts', import.meta.url), { type: 'module' })
     workerRef.current = w
-    w.onmessage = (e: MessageEvent<{ type: string; heights: [string, number][] }>) => {
+    w.onmessage = (
+      e: MessageEvent<{ type: string; heights: [string, number][]; replace?: boolean }>,
+    ) => {
       if (e.data.type !== WorkerMsg.HEIGHTS_READY) return
+      // A resize response (`replace`) recomputes heights for already-measured items,
+      // so overwrite them; an initial prepare must not clobber freshly measured DOM values.
+      const replace = e.data.replace === true
       let updated = false
       for (const [id, height] of e.data.heights) {
-        if (!heightStoreRef.current.has(id)) {
+        if (replace || !heightStoreRef.current.has(id)) {
           heightStoreRef.current.set(id, height, 'pretext')
           updated = true
         }
