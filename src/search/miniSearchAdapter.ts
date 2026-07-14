@@ -12,6 +12,25 @@ export function isHighlightCaseSensitive(options: SearchOptions): boolean {
   return !!(options.caseSensitive && (options.regex || options.exactMatch))
 }
 
+/**
+ * Whether highlight ranges should be constrained to whole-word boundaries.
+ *
+ * Fuzzy/prefix mode matches on whole-word *tokens* — MiniSearch tokenizes the
+ * text into words and its `match` reports those tokens verbatim — so the
+ * highlights must be word-bounded too. Otherwise a matched token like "on"
+ * bleeds into every "on" *inside* a larger word ("onboarding", "conversation",
+ * "hydration"), highlighting fragments the search never matched on.
+ *
+ * Exact-match mode is a literal substring search, so it only bounds when the
+ * caller opts into `wholeWord`. Regex mode never bounds here — the user
+ * expresses boundaries in the pattern itself.
+ */
+export function isHighlightWholeWord(options: SearchOptions): boolean {
+  if (options.regex) return false
+  if (options.exactMatch) return !!options.wholeWord
+  return true // fuzzy / prefix — terms are whole-word tokens
+}
+
 export function createSearchIndex<T extends VirtualItem>(
   items: T[],
   fields: string[]
@@ -107,11 +126,9 @@ function makeExactMatcher(query: string, caseSensitive?: boolean, wholeWord?: bo
   if (!query) return () => null
 
   if (wholeWord) {
-    const re = new RegExp(`\\b${escapeRegex(query)}\\b`, caseSensitive ? 'g' : 'gi')
-    return (text: string) => {
-      re.lastIndex = 0
-      return re.test(text) ? [query] : null
-    }
+    // Stateless `test` (no `g` flag) so there's no lastIndex to reset between items.
+    const re = new RegExp(wholeWordPattern(query), caseSensitive ? 'u' : 'iu')
+    return (text: string) => (re.test(text) ? [query] : null)
   }
 
   const needle = caseSensitive ? query : query.toLowerCase()
@@ -155,6 +172,18 @@ export function escapeRegex(s: string): string {
 }
 
 /**
+ * Wraps a literal term so it only matches as a *whole word*. Unicode-aware: a
+ * "word" is a maximal run of letters/numbers (`\p{L}\p{N}`), which mirrors
+ * MiniSearch's tokenizer (it splits on punctuation and whitespace) far better
+ * than the ASCII-only `\b`. `\b` mishandles accented text — e.g. it refuses to
+ * bound "café" because `é` isn't an ASCII word char. Callers must compile the
+ * returned pattern with the `u` flag.
+ */
+function wholeWordPattern(term: string): string {
+  return `(?<![\\p{L}\\p{N}])${escapeRegex(term)}(?![\\p{L}\\p{N}])`
+}
+
+/**
  * Resolve character ranges for highlighted terms against real field text.
  * Called lazily — only for visible items.
  */
@@ -168,8 +197,9 @@ export function resolveRanges(
   if (!filtered.length || !text) return []
   const ranges: MatchRange[] = []
   for (const term of filtered) {
-    const pattern = wholeWord ? `\\b${escapeRegex(term)}\\b` : escapeRegex(term)
-    const re = new RegExp(pattern, caseSensitive ? 'g' : 'gi')
+    const pattern = wholeWord ? wholeWordPattern(term) : escapeRegex(term)
+    const flags = (caseSensitive ? 'g' : 'gi') + (wholeWord ? 'u' : '')
+    const re = new RegExp(pattern, flags)
     let m: RegExpExecArray | null
     while ((m = re.exec(text)) !== null) {
       ranges.push({ start: m.index, end: m.index + m[0].length })
@@ -195,9 +225,10 @@ export function buildMatchSnippet(
   text: string,
   terms: string[],
   caseSensitive = false,
+  wholeWord = false,
   contextChars = SNIPPET_CONTEXT_CHARS
 ): MatchSnippet | null {
-  const ranges = resolveRanges(text, terms, caseSensitive)
+  const ranges = resolveRanges(text, terms, caseSensitive, wholeWord)
   if (!ranges.length) return null
   const { start, end } = ranges[0]
 

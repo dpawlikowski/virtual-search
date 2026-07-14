@@ -16,7 +16,7 @@ import type {
   MatchRange,
 } from '../types'
 import { EMA_DEFAULT_FALLBACK } from '../utils'
-import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
+import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive, isHighlightWholeWord } from '../search/miniSearchAdapter'
 import { useServerSearch } from './useServerSearch'
 import { useHeightCache, HeightStore } from './useHeightCache'
 
@@ -298,10 +298,11 @@ export function useSearchableList<T extends VirtualItem>(
 
   // ── Highlights — lazy, per visible item ───────────────────────────────────
   const highlightsCaseSensitive = isHighlightCaseSensitive(searchState.options)
-  // wholeWord is ignored in regex mode (the user writes \b themselves there);
-  // in fuzzy/exact mode it must also constrain highlighting, or a whole-word
-  // search for "cat" would still highlight "cat" inside "catalog".
-  const highlightsWholeWord = !!searchState.options.wholeWord && !searchState.options.regex
+  // Fuzzy/prefix highlights are ALWAYS word-bounded — its matched terms are
+  // whole-word tokens, so an unbounded (substring) highlight would smear a
+  // token like "on" across "onboarding"/"conversation". Exact match honors the
+  // wholeWord toggle; regex bounds via the pattern itself. See isHighlightWholeWord.
+  const highlightsWholeWord = isHighlightWholeWord(searchState.options)
 
   const getHighlights = useCallback(
     (idx: number): Map<string, MatchRange[]> | undefined => {

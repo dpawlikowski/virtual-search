@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import type { Virtualizer } from '@tanstack/react-virtual'
 import type { SearchMatch, SearchOptions, VirtualItem } from '../types'
-import { buildMatchSnippet, isHighlightCaseSensitive } from '../search/miniSearchAdapter'
+import { buildMatchSnippet, isHighlightCaseSensitive, isHighlightWholeWord } from '../search/miniSearchAdapter'
 import { useMinimapBuckets, nearestBucket } from '../hooks/useMinimapBuckets'
 import { useDragScroll } from '../hooks/useDragScroll'
 
@@ -50,6 +50,7 @@ export function MatchMinimap({
   markerHeightPx = DEFAULT_MARKER_HEIGHT_PX, snippetContextChars,
 }: MatchMinimapProps) {
   const caseSensitive = isHighlightCaseSensitive(searchOptions ?? {})
+  const wholeWord = isHighlightWholeWord(searchOptions ?? {})
   // Stride between bucket centers — taller than the marker itself so adjacent
   // markers always have a visible gap instead of touching/overlapping at the
   // edges (which would also make the lower one unclickable/unhoverable, since
@@ -121,11 +122,11 @@ export function MatchMinimap({
     const item = itemById.get(match.itemId)
     if (!item) return null
     for (const terms of match.terms.values()) {
-      const snippet = buildMatchSnippet(item.text, terms, caseSensitive, snippetContextChars)
+      const snippet = buildMatchSnippet(item.text, terms, caseSensitive, wholeWord, snippetContextChars)
       if (snippet) return snippet
     }
     return null
-  }, [hoveredBucket, itemById, matches, caseSensitive, snippetContextChars])
+  }, [hoveredBucket, itemById, matches, caseSensitive, wholeWord, snippetContextChars])
 
   // Roving tabindex: only one marker is a Tab stop at a time, defaulting to
   // the one containing the current active match (falls back to the first).

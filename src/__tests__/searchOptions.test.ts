@@ -177,7 +177,7 @@ describe('buildMatchSnippet', () => {
 
   it('prefixes with an ellipsis when context is truncated', () => {
     const text = 'x'.repeat(50) + 'TARGET' + 'y'.repeat(50)
-    const snippet = buildMatchSnippet(text, ['TARGET'], true, 10)
+    const snippet = buildMatchSnippet(text, ['TARGET'], true, false, 10)
     expect(snippet!.before.startsWith('…')).toBe(true)
     expect(snippet!.after.endsWith('…')).toBe(true)
   })

@@ -193,7 +193,7 @@ type Tab = 'emails' | 'news'
 export default function App() {
   const [tab, setTab] = useState<Tab>('emails')
 
-  const { visible, inputRef, close, open } = useSearchToggle()
+  const { visible, inputRef, close } = useSearchToggle()
 
   const switchTab = useCallback((next: Tab) => {
     close()

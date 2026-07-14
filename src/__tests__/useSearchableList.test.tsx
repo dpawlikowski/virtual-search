@@ -241,6 +241,21 @@ describe('useSearchableList — getHighlights / getIsActiveMatch', () => {
     expect(highlights?.get('text')?.length).toBeGreaterThan(0)
   })
 
+  it('word-bounds fuzzy highlights — never smears a token across a larger word', async () => {
+    // Regression: searching "on" used to highlight the "on" inside
+    // "conversation" (raw substring). getHighlights must only mark the
+    // standalone word.
+    const bleedItems: VirtualItem[] = [
+      { id: 'a', text: 'I followed up on our conversation about hydration' },
+    ]
+    const { result } = renderHook(() => useSearchableList({ items: bleedItems }))
+    act(() => result.current.setQuery('on'))
+    await waitFor(() => expect(result.current.search.matches.length).toBeGreaterThan(0))
+    const ranges = result.current.getHighlights(0)?.get('text') ?? []
+    const matched = ranges.map(r => bleedItems[0].text.slice(r.start, r.end))
+    expect(matched).toEqual(['on'])
+  })
+
   it('returns undefined for an item with no match', async () => {
     const { result } = renderHook(() => useSearchableList({ items }))
     act(() => result.current.setQuery('lazy'))
