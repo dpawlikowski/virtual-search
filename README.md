@@ -1,6 +1,6 @@
 # virtual-search
 
-Virtualized list for React with hybrid height estimation, full-text search across **all** data (not just visible items), and scroll-to-match with highlight.
+A React library for searchable virtual lists. It searches the full data set, scrolls to matches, highlights the text the user entered, and estimates row heights before they are measured.
 
 ```
 npm install @virtual-search/core
@@ -10,11 +10,11 @@ npm install @virtual-search/core
 
 ## The problem
 
-Virtualizers like TanStack Virtual or react-virtuoso only render what's visible — which is why they're fast. But this creates two hard problems no existing library solves together:
+Virtualizers like TanStack Virtual or react-virtuoso are fast because they render only what is visible. This creates two hard problems that no existing library solves together:
 
 1. **Height estimation is guesswork.** Variable-height items have unknown heights before they're rendered. A virtualizer needs *some* estimate for items it hasn't measured yet, and a bad estimate makes the scrollbar jump as real heights come in.
 
-2. **Search breaks with virtualization.** The browser's `Ctrl+F` can't find text that isn't in the DOM. Custom search has to work against the full in-memory dataset and then scroll to the exact match — which the virtualizer has to render first.
+2. **Search breaks with virtualization.** The browser's `Ctrl+F` cannot find text that is not in the DOM. A custom search has to inspect the full data set, find the right row, and ask the virtualizer to render it.
 
 This library solves both. Runtime measurement and scroll anchoring are delegated to TanStack Virtual (which does them well); the value added here is a smart **initial** height estimate plus a search layer wired into the virtualizer.
 
@@ -22,16 +22,16 @@ This library solves both. Runtime measurement and scroll anchoring are delegated
 
 ## Features
 
-- **Hybrid initial height estimation** — 4-layer cascade: server hints → IndexedDB (previous sessions) → Pretext (off-thread text measurement) → EMA fallback
-- **Measurement owned by TanStack Virtual** — once an item renders, `measureElement` takes over; no duplicate ResizeObserver, no manual scroll anchoring to fight with
-- **Full-text search** — MiniSearch indexes every item immediately, including text not currently rendered in the DOM
-- **Regex / exact-match / case-sensitive search modes** — toggle via `setSearchOptions`; `SearchBar` ships with `.*` / `" "` / `Aa` buttons when `onOptionsChange` is passed
-- **Optional server search** — pass `onServerSearch` to merge extra results from wherever you fetch them into the local list. Transport-agnostic (no `fetch`/HTTP baked in): debounced, cancels stale in-flight requests via `AbortSignal`, ignores out-of-order responses, and its code lives in a separate hook (`useServerSearch`) so it tree-shakes away entirely for consumers who never set the option
-- **Scroll-to-match** — jumps to the exact item containing the match, centers it in the viewport, and self-corrects on the next frame once unmeasured items settle into their real height
-- **Match minimap** — `MatchMinimap` renders a find-in-page style marker track alongside the scroll container, with click-to-jump
-- **Ctrl+F to show/hide** — optional `useSearchToggle` hook binds Ctrl+F (Cmd+F on macOS) to toggle the search bar, auto-focuses the input, and closes on Escape
-- **Inline highlight** — character-level ranges passed to your item renderer; the provided `HighlightedText` component renders the spans
-- **TypeScript-first** — strict types throughout, zero `any`
+- **Hybrid initial height estimation**: 4-layer cascade: server hints → IndexedDB (previous sessions) → Pretext (off-thread text measurement) → EMA fallback
+- **Measurement owned by TanStack Virtual**: once an item renders, `measureElement` takes over; no duplicate ResizeObserver, no manual scroll anchoring to fight with
+- **Search across the full list:** MiniSearch indexes every item, including rows that are not currently in the DOM. The default mode supports fuzzy matches, prefixes, and literal fragments inside words. For example, `ra` finds the same fragment in `rapid` and `vulnerability`.
+- **Regex, exact match, whole word, and case sensitivity:** pass `setSearchOptions` to `SearchBar` to show the built-in controls.
+- **Optional server search**: pass `onServerSearch` to merge extra results from wherever you fetch them into the local list. Transport-agnostic (no `fetch`/HTTP baked in): debounced, cancels stale in-flight requests via `AbortSignal`, ignores out-of-order responses, and its code lives in a separate hook (`useServerSearch`) so it tree-shakes away entirely for consumers who never set the option
+- **Scroll-to-match**: jumps to the exact item containing the match, centers it in the viewport, and self-corrects on the next frame once unmeasured items settle into their real height
+- **Match minimap**: `MatchMinimap` renders a find-in-page style marker track alongside the scroll container, with click-to-jump
+- **Ctrl+F to show/hide**: optional `useSearchToggle` hook binds Ctrl+F (Cmd+F on macOS) to toggle the search bar, auto-focuses the input, and closes on Escape
+- **Inline highlight**: character-level ranges passed to your item renderer; the provided `HighlightedText` component renders the spans
+- **TypeScript-first**: strict types throughout, zero `any`
 
 ---
 
@@ -43,7 +43,7 @@ import '@virtual-search/core/styles.css'
 
 interface Doc {
   id: string
-  text: string   // required — used for search and height measurement
+  text: string   // required: used for search and height measurement
   title: string
 }
 
@@ -62,6 +62,7 @@ function DocumentList({ docs }: { docs: Doc[] }) {
   } = useSearchableList<Doc>({
     items: docs,
     containerHeight: 600,
+    searchFields: ['title', 'text'],
   })
 
   return (
@@ -83,7 +84,7 @@ function DocumentList({ docs }: { docs: Doc[] }) {
                 key={doc.id}
                 ref={observeItem}              // wires TanStack measurement + height cache
                 data-index={vi.index}          // required by TanStack measureElement
-                data-vs-item-id={doc.id}       // required — identifies the item for the cache
+                data-vs-item-id={doc.id}       // required: identifies the item for the cache
                 style={{
                   position: 'absolute',
                   top: 0,
@@ -93,7 +94,7 @@ function DocumentList({ docs }: { docs: Doc[] }) {
                 }}
               >
                 <h3>
-                  <HighlightedText text={doc.title} ranges={highlights?.get('text')} />
+                  <HighlightedText text={doc.title} ranges={highlights?.get('title')} />
                 </h3>
                 <p>
                   <HighlightedText text={doc.text} ranges={highlights?.get('text')} />
@@ -109,15 +110,15 @@ function DocumentList({ docs }: { docs: Doc[] }) {
 ```
 
 Two attributes are required on each item element:
-- `ref={observeItem}` — wires the element into TanStack's measurement and persists the measured height to the cache
-- `data-index={vi.index}` — TanStack's `measureElement` reads this to know which item it's measuring
-- `data-vs-item-id={item.id}` — identifies the item for the IndexedDB height cache. In development builds, `observeItem` logs a `console.warn` if this is missing on a rendered element, since without it the item's height silently never persists and match navigation to it can misbehave.
+- `ref={observeItem}`: wires the element into TanStack's measurement and persists the measured height to the cache
+- `data-index={vi.index}`: TanStack's `measureElement` reads this to know which item it's measuring
+- `data-vs-item-id={item.id}`: identifies the item for the IndexedDB height cache. In development builds, `observeItem` logs a `console.warn` if this is missing on a rendered element, since without it the item's height silently never persists and match navigation to it can misbehave.
 
 For best performance, wrap your row in `React.memo` and pass primitives (`translateY`, `index`) rather than the virtual-item object.
 
 ---
 
-## Height estimation — how it works
+## Height estimation: how it works
 
 The library produces an **initial** estimate for each not-yet-rendered item through a 4-layer priority cascade. Once an item is rendered, TanStack Virtual measures it for real and that measurement is authoritative.
 
@@ -142,7 +143,7 @@ items load
        Stabilises after a few measured items
 ```
 
-After render, TanStack measures the element. The library reads that height, stores it (feeding the EMA and persisting to IndexedDB, debounced), and TanStack handles scroll anchoring internally — no manual `scrollTop` adjustment.
+After render, TanStack measures the element. The library reads that height, stores it (feeding the EMA and persisting to IndexedDB, debounced), and TanStack handles scroll anchoring internally: no manual `scrollTop` adjustment.
 
 ### Server hints
 
@@ -164,7 +165,7 @@ Collect measurements via `onMeasureReport` and aggregate server-side using the P
 
 ### Pretext-powered measurement
 
-`@chenglou/pretext` ships as a regular dependency and is used automatically by the Pretext worker for precise off-thread text measurement — line-breaking aware of real font metrics, accurate across varying text lengths and widths. If it ever fails to load in a given environment, the worker falls back to a character-count estimator (~80% accurate for typical text).
+`@chenglou/pretext` ships as a regular dependency and is used automatically by the Pretext worker for precise off-thread text measurement: line-breaking aware of real font metrics, accurate across varying text lengths and widths. If it ever fails to load in a given environment, the worker falls back to a character-count estimator (~80% accurate for typical text).
 
 **Caveat:** Pretext requires a named font (`16px Inter`, not `system-ui`).
 
@@ -181,29 +182,29 @@ interface UseSearchableListOptions<T extends VirtualItem> {
 
   // Search
   searchFields?: Array<keyof T & string>    // default: ['text']
-  onServerSearch?: (q: string, signal: AbortSignal) => Promise<T[]>  // optional — transport-agnostic, bring your own fetch/GraphQL/etc.
+  onServerSearch?: (q: string, signal: AbortSignal) => Promise<T[]>  // optional: transport-agnostic, bring your own fetch/GraphQL/etc.
   serverSearchDebounce?: number             // default: 250ms
-  serverSearchMinLength?: number            // default: 1 — queries shorter than this never call onServerSearch
+  serverSearchMinLength?: number            // default: 1: queries shorter than this never call onServerSearch
   mergeServerResults?: (base: T[], server: T[]) => T[]  // default: append server results not already present by id
 
   // Height estimation
-  containerHeight?: number                  // applied directly to the container's style.height — no need to also set it in your own CSS
+  containerHeight?: number                  // applied directly to the container's style.height: no need to also set it in your own CSS
   serverHintMinSamples?: number             // default: 10
   onMeasureReport?: (id: string, height: number, bucket: ViewportBucket) => void
   defaultItemHeight?: number                // default: 150px
 
   // Storage
   cacheStoreName?: string                   // default: 'virtual-search-heights'
-  cacheTtlMs?: number                       // default: 30 days — how long a cached height stays valid
+  cacheTtlMs?: number                       // default: 30 days: how long a cached height stays valid
 
   // Errors
-  onSearchError?: (error: unknown) => void  // called when onServerSearch rejects — local search keeps working regardless
+  onSearchError?: (error: unknown) => void  // called when onServerSearch rejects: local search keeps working regardless
 
-  // Tuning — sensible defaults, override only if profiling shows a need to
-  persistDebounceMs?: number                // default: 500ms — debounce before a measured height is written to IndexedDB
-  resizeDebounceMs?: number                 // default: 200ms — debounce before a container resize triggers Pretext re-layout
-  overscan?: number                         // default: 4 — extra items rendered outside the viewport, passed to TanStack Virtual
-  scrollAlign?: 'start' | 'center' | 'end' | 'auto'  // default: 'center' — alignment used by nextMatch/prevMatch/goToMatch
+  // Tuning: sensible defaults, override only if profiling shows a need to
+  persistDebounceMs?: number                // default: 500ms: debounce before a measured height is written to IndexedDB
+  resizeDebounceMs?: number                 // default: 200ms: debounce before a container resize triggers Pretext re-layout
+  overscan?: number                         // default: 4: extra items rendered outside the viewport, passed to TanStack Virtual
+  scrollAlign?: 'start' | 'center' | 'end' | 'auto'  // default: 'center'; used by nextMatch, prevMatch, and goToMatch
 }
 ```
 
@@ -219,21 +220,21 @@ Returns:
 | `nextMatch` | `() => void` | Move to next match and scroll to it |
 | `prevMatch` | `() => void` | Move to previous match and scroll to it |
 | `goToMatch` | `(matchIndex: number) => void` | Jump directly to a match by index (e.g. from a `MatchMinimap` marker) |
-| `getHighlights` | `(index: number) => Map<field, MatchRange[]> \| undefined` | Character ranges for a given item (lazy — only for visible items) |
+| `getHighlights` | `(index: number) => Map<field, MatchRange[]> \| undefined` | Character ranges for a given item (lazy: only for visible items) |
 | `getIsActiveMatch` | `(itemId: string) => boolean` | O(1) check whether an item is the active match |
 | `observeItem` | `(el: HTMLElement \| null) => void` | Ref callback for each item element |
 | `containerRef` | `RefObject<HTMLDivElement>` | Attach to the scroll container |
 | `getHeightSource` | `(index: number) => HeightSource` | Debug: which layer provided the initial height |
-| `isServerSearching` | `boolean` | True while an `onServerSearch` request is in flight — independent of `search.isSearching` (local index search) |
+| `isServerSearching` | `boolean` | True while an `onServerSearch` request is in flight: independent of `search.isSearching` (local index search) |
 
-### Search options — regex / exact match / whole word / case sensitivity
+### Search options
 
 ```ts
 interface SearchOptions {
   regex?: boolean          // treat the query as a regular expression
-  exactMatch?: boolean     // literal substring match instead of fuzzy/prefix (ignored if `regex` is set)
-  caseSensitive?: boolean  // only applies to regex/exactMatch — fuzzy search is always case-insensitive
-  wholeWord?: boolean      // word-boundary constrained; disables prefix matching in fuzzy mode. Ignored if `regex` is set
+  exactMatch?: boolean     // use literal substring matching without fuzzy matching
+  caseSensitive?: boolean  // applies to regex and exactMatch
+  wholeWord?: boolean      // require word boundaries; ignored in regex mode
 }
 ```
 
@@ -243,21 +244,46 @@ const { search, setSearchOptions } = useSearchableList({ items })
 <SearchBar search={search} onOptionsChange={setSearchOptions} /* …rest */ />
 ```
 
-`SearchBar` renders `.*` (regex), `" "` (exact match), `|ab|` (whole word), and `Aa` (case sensitive) toggle buttons whenever `onOptionsChange` is passed. Omit the prop to hide them and keep plain fuzzy search.
+`SearchBar` shows four controls when you pass `onOptionsChange`: `.*` for regex, `" "` for exact match, `|ab|` for whole word, and `Aa` for case sensitivity. Leave out `onOptionsChange` if you do not want to show them.
 
-Two toggles are conditionally disabled, matching what actually has an effect:
-- **`Aa`** is disabled unless `regex` or `exactMatch` is active — MiniSearch's fuzzy/prefix terms are lowercased internally, so case-sensitivity has no meaningful effect in plain fuzzy mode.
-- **`|ab|`** is disabled while `regex` is active — write `\b` yourself for full control there.
+Choose `searchFields` from the fields people can actually see. If an email row shows `from`, `subject`, and `preview`, pass all three:
+
+```tsx
+useSearchableList({
+  items: emails,
+  searchFields: ['from', 'subject', 'preview'],
+})
+```
+
+The keys returned by `getHighlights` match these field names. Use the matching key when rendering each value. A field that is present only inside a concatenated `text` value can be found, but it cannot be highlighted accurately in its separate visual element.
+
+The default mode is case-insensitive. It combines three useful behaviors:
+
+- Literal substring matching finds the text anywhere in a field. Searching for `ra` finds `rapid`, `paragraph`, and `vulnerability`.
+- Prefix matching finds words that start with the query.
+- Fuzzy matching still finds close spellings such as `quik` for `quick`.
+
+Highlighting follows the query. Searching for `w` highlights the letter `w`, not the whole word `week`. A fuzzy match with no literal occurrence can highlight the word MiniSearch matched.
+
+`exactMatch` turns off fuzzy and prefix matching. It still finds a literal fragment inside a longer word unless `wholeWord` is also enabled.
+
+`wholeWord` changes the default mode from prefix matching to full-token matching. Fuzzy matching remains available. With `exactMatch`, it requires real boundaries around the literal word or phrase. The boundary check is Unicode-aware, so words such as `café` work correctly.
+
+`regex` treats the query as a JavaScript regular expression. Invalid expressions return no results instead of throwing. Empty matches are ignored. `wholeWord` is disabled in this mode because the expression should define its own boundaries.
+
+`caseSensitive` applies only to regex and exact match. The `Aa` control is disabled in the default mode. The `|ab|` control is disabled in regex mode.
+
+Regex and exact match are mutually exclusive. The core library normalizes these options, so custom search controls behave the same way as `SearchBar`.
 
 ### `MatchMinimap`
 
-Overlays the scroll container's own scrollbar track with small yellow ticks — like find-in-page in browsers/VSCode — rather than floating as a separate strip beside it. Each marker's position comes from the match's real offset in the full (possibly virtualized, not-yet-rendered) list via `virtualizer.getOffsetForIndex`, so it reflects where the match actually is, not an approximation. Dense result sets are bucketed to the track's real pixel height so they render as a handful of distinct rectangles instead of one solid bar. Positions are computed across the *entire* list, so matches deep in not-yet-rendered territory still show up at the right spot — click anywhere on the track to jump straight there without first scrolling to find it.
+Overlays the scroll container's own scrollbar track with small yellow ticks: like find-in-page in browsers/VSCode: rather than floating as a separate strip beside it. Each marker's position comes from the match's real offset in the full (possibly virtualized, not-yet-rendered) list via `virtualizer.getOffsetForIndex`, so it reflects where the match actually is, not an approximation. Dense result sets are bucketed to the track's real pixel height so they render as a handful of distinct rectangles instead of one solid bar. Positions are computed across the *entire* list, so matches deep in not-yet-rendered territory still show up at the right spot: click anywhere on the track to jump straight there without first scrolling to find it.
 
-A dense result set can fill the whole track with marker ticks, burying the scrollbar thumb underneath with no visible handle left to grab — so `MatchMinimap` also renders its own scroll-position thumb on top of the markers (higher `z-index`, a distinct color, protruding slightly past the track's right edge), reflecting the scroll container's real viewport and fully draggable to scroll.
+A dense result set can fill the whole track with marker ticks and hide the scrollbar thumb. To keep scrolling usable, `MatchMinimap` renders its own draggable thumb above the markers. It uses a distinct color and extends slightly beyond the track, so it remains easy to see and grab.
 
-A bucket's match count is a pixel-resolution artifact, not a "these are all right next to each other" guarantee — at low zoom (a long list against a short track) a single bucket can lump together matches actually scattered across a large chunk of the list. It's labeled `~N matches in this area` (both the `aria-label` and the hover tooltip) rather than implying an exact, tightly-clustered position, and the marker's own height grows (log-scaled, capped) with cluster size so a genuinely dense cluster reads as a visibly thicker band than a single match's thin tick.
+A bucket's match count is limited by the number of pixels available on the track. In a long list, one bucket can represent matches spread across a sizeable area. The label therefore says `~N matches in this area` instead of suggesting an exact position. The marker also grows with the number of matches, up to a sensible limit.
 
-**Important — `MatchMinimap` must be a DOM sibling of the scroll container, not a child of it.** It needs a *non-scrolling* positioned ancestor to anchor to; if you nest it inside the element that has `overflow: auto`, its `position: absolute` offsets get carried along by that element's own scrolling and it visually disappears as soon as you scroll past the first viewport-height of content:
+**Important: `MatchMinimap` must be a DOM sibling of the scroll container, not a child of it.** It needs a *non-scrolling* positioned ancestor to anchor to; if you nest it inside the element that has `overflow: auto`, its `position: absolute` offsets get carried along by that element's own scrolling and it visually disappears as soon as you scroll past the first viewport-height of content:
 
 ```tsx
 <div className="vs-list-wrapper">{/* plain position: relative, does NOT scroll */}
@@ -270,20 +296,20 @@ A bucket's match count is a pixel-resolution artifact, not a "these are all righ
     matches={search.matches}
     activeMatchIndex={search.activeMatchIndex}
     onJump={goToMatch}
-    items={items}              // optional — enables the hover tooltip. Plain VirtualItem[] is enough, no need to narrow the type
-    searchOptions={search.options}  // optional — passed straight from useSearchableList
-    markerHeightPx={4}         // optional — default 4
-    snippetContextChars={28}   // optional — chars of context on each side of the match in the tooltip, default 28
+    items={items}              // optional: enables the hover tooltip. Plain VirtualItem[] is enough, no need to narrow the type
+    searchOptions={search.options}  // optional: passed straight from useSearchableList
+    markerHeightPx={4}         // optional: default 4
+    snippetContextChars={28}   // optional: chars of context on each side of the match in the tooltip, default 28
   />
 </div>
 ```
 
-`.vs-list-wrapper` (just `position: relative`) is included in `styles.css` — reuse it, or apply the same on your own wrapper.
+`.vs-list-wrapper` (just `position: relative`) is included in `styles.css`: reuse it, or apply the same on your own wrapper.
 
 - **Click anywhere on the track**, not just exactly on a marker, to jump to the nearest match.
-- **Hover (or focus) a marker** to see a tooltip with a short excerpt around that match and the searched term in bold — pass `items` to enable it.
-- **Keyboard**: the track is a single Tab stop (roving tabindex, defaulting to the marker containing the active match) — Arrow Up/Down/Left/Right moves between markers, Home/End jump to the first/last, Enter/Space jumps to the focused one. This avoids flooding the page's tab order with one stop per match, which a dense result set could easily number in the hundreds.
-- `.vs-container`'s scrollbar is styled to a fixed, known width (`--vs-scrollbar-width`, default `10px`) so the minimap can be sized to exactly overlay it, and positioned flush to its right edge (`right: 0`) — same reason it needs the non-scrolling wrapper above: it has to line up with the scrollbar visually regardless of scroll position.
+- **Hover (or focus) a marker** to see a tooltip with a short excerpt around that match and the searched term in bold: pass `items` to enable it.
+- **Keyboard:** the track uses one Tab stop. Arrow keys move between markers, Home and End go to the first or last marker, and Enter or Space opens the focused match. This avoids adding hundreds of stops to the page's tab order.
+- The `.vs-container` scrollbar has a known width through `--vs-scrollbar-width`, which defaults to `10px`. This lets the minimap line up with the scrollbar at every scroll position.
 
 ### `VirtualItem` interface
 
@@ -293,7 +319,7 @@ Every item must implement:
 interface VirtualItem {
   id: string          // stable unique identifier
   text: string        // full plain-text content (searched + measured)
-  type?: string       // optional — enables per-type EMA
+  type?: string       // optional: enables per-type EMA
   _hints?: ServerHeightHints
 }
 ```
@@ -335,7 +361,7 @@ Options:
 ```ts
 interface UseSearchToggleOptions {
   initialVisible?: boolean          // default: false
-  preventDefault?: boolean          // default: true — block native find dialog
+  preventDefault?: boolean          // default: true: block native find dialog
   scopeRef?: RefObject<HTMLElement> // only toggle when focus is within this element
   onOpen?: () => void
   onClose?: () => void
@@ -369,9 +395,9 @@ Keyboard: `Enter` → next match, `Shift+Enter` → previous match, `Escape` →
   onPrev={() => void}
   placeholder="Search…"
   className=""
-  inputRef={inputRef}     // optional — from useSearchToggle, enables auto-focus
-  onEscape={() => void}   // optional — called on Escape (e.g. to hide the bar)
-  labels={{                // optional — override any built-in English string/aria-label for localization
+  inputRef={inputRef}     // optional: from useSearchToggle, enables auto-focus
+  onEscape={() => void}   // optional: called on Escape (e.g. to hide the bar)
+  labels={{                // optional: override any built-in English string/aria-label for localization
     searchInputAriaLabel: 'Szukaj…',
     noResults: 'Brak wyników',
     // ...see SearchBarLabels for the full list; unspecified keys keep their English default
@@ -385,19 +411,19 @@ Keyboard: `Enter` → next match, `Shift+Enter` → previous match, `Escape` →
 
 ### Why delegate measurement to TanStack Virtual?
 
-An earlier version ran its own `ResizeObserver` on every item *in addition* to TanStack's, plus manual scroll anchoring. That meant two observers measuring the same element and two systems fighting over `scrollTop` — the cause of slow scrolling and jumpy positioning. The fix was to stop competing: TanStack's `measureElement` owns runtime measurement and scroll anchoring; this library only supplies the initial estimate and reads the result.
+An earlier version used its own `ResizeObserver` in addition to TanStack's observer and also adjusted `scrollTop` manually. Both systems measured and moved the same list, which caused slow scrolling and unstable positions. TanStack's `measureElement` now owns runtime measurement and scroll anchoring. This library supplies only the initial estimate and reads the final measurement.
 
 ### Why MiniSearch over Fuse.js or FlexSearch?
 
-MiniSearch balances full-text indexing (not just fuzzy matching), prefix search, field boosting, a small bundle (~25KB), and it returns matched-term info we turn into highlight ranges. Fuse.js is fuzzy-only and doesn't give character positions. FlexSearch is faster but heavier to configure.
+MiniSearch gives us a compact full-text index, prefix search, fuzzy matching, field boosting, and information about the matched terms. The library adds a literal substring pass for browser-like matches inside words. It then combines both result sets without duplicating items. This keeps typo tolerance while making short queries behave naturally.
 
 ### Why IndexedDB over localStorage for the height cache?
 
-localStorage is synchronous and blocks the main thread; a bulk write at 10 000 items causes visible jank. IndexedDB is async, effectively unbounded, and `getAll()` makes bulk reads fast. OPFS would win for large binary blobs, but height cache is tiny JSON — OPFS's Worker-only sync API isn't worth the complexity.
+localStorage is synchronous and blocks the main thread; a bulk write at 10 000 items causes visible jank. IndexedDB is async, effectively unbounded, and `getAll()` makes bulk reads fast. OPFS would win for large binary blobs, but height cache is tiny JSON: OPFS's Worker-only sync API isn't worth the complexity.
 
 ### Why Pretext in a Web Worker?
 
-`prepare()` calls canvas `measureText()` — fast but not free; running it for 10 000 items synchronously blocks the main thread. In a Worker it runs off-thread. On resize, only the cheap `layout()` re-runs, not `prepare()`.
+`prepare()` calls canvas `measureText()`: fast but not free; running it for 10 000 items synchronously blocks the main thread. In a Worker it runs off-thread. On resize, only the cheap `layout()` re-runs, not `prepare()`.
 
 ### Why a 4-layer cascade instead of measuring everything up front?
 
@@ -405,38 +431,38 @@ You can't measure an element that isn't in the DOM, and rendering 10 000 element
 
 ### Search incremental indexing
 
-The MiniSearch index is built once and only *added to* as new items arrive (e.g. from `onServerSearch`). It is never rebuilt from scratch on every items change — a full rebuild at 5 000 items would block the main thread for tens of milliseconds on each update.
+The MiniSearch index is created once. New items are added incrementally, and items that disappear are discarded. Rebuilding the full index after every update would block the main thread on larger lists.
 
-### Server search — design and why it's tree-shakeable
+### Server search: design and why it's tree-shakeable
 
-`onServerSearch` is a plain `(query, signal) => Promise<T[]>` callback — there is no `fetch`, HTTP client, or endpoint shape assumed anywhere in this library. You decide what "server" means: REST, GraphQL, a local worker, a mock in tests.
+`onServerSearch` is a plain `(query, signal) => Promise<T[]>` callback. The library does not assume `fetch`, a particular HTTP client, or an endpoint shape. The data can come from REST, GraphQL, a local worker, or a test fixture.
 
 The debounce/cancellation/merge machinery lives entirely in a separate hook, `useServerSearch` (`src/hooks/useServerSearch.ts`), that `useSearchableList` composes in:
 
 - **Debounced** by `serverSearchDebounce` (default 250ms) and gated by `serverSearchMinLength` (default 1) so short/rapid keystrokes don't spam your search function.
-- **Cancellation-aware** — each call gets its own `AbortController`; the previous one is aborted before a new request starts. Pass the `signal` argument to `fetch`/your client to actually cancel network work; if you don't, the hook still protects you via the next point.
-- **Stale-response guard** — every request is tagged with a monotonic id. If a slower earlier request resolves after a newer one already landed, its result is silently dropped, whether or not `signal` is wired up.
-- **Pluggable merge** — `mergeServerResults(base, server)` controls how results combine with local `items`. The default appends server items not already present by `id`; override it to sort, cap the list, or replace instead of append.
-- **Independent loading state** — `isServerSearching` reflects only the server round-trip, so a slow network call doesn't show up as the (synchronous) local `search.isSearching` flag.
+- **Cancellation-aware**: each call gets its own `AbortController`; the previous one is aborted before a new request starts. Pass the `signal` argument to `fetch`/your client to actually cancel network work; if you don't, the hook still protects you via the next point.
+- **Stale-response guard**: every request is tagged with a monotonic id. If a slower earlier request resolves after a newer one already landed, its result is silently dropped, whether or not `signal` is wired up.
+- **Pluggable merge**: `mergeServerResults(base, server)` controls how results combine with local `items`. The default appends server items not already present by `id`; override it to sort, cap the list, or replace instead of append.
+- **Independent loading state**: `isServerSearching` reflects only the server round-trip, so a slow network call doesn't show up as the (synchronous) local `search.isSearching` flag.
 
-Because it's a standalone hook module rather than logic inlined into `useSearchableList`, a bundler that tree-shakes unused exports can drop `useServerSearch`'s code (debounce wiring, `AbortController` plumbing, stale-response bookkeeping) for any consumer that never passes `onServerSearch` — there's no dead branch left sitting in the shipped bundle for the common case of local-only search.
+The server search code lives in a separate hook instead of being inlined into `useSearchableList`. A bundler can remove its debounce, cancellation, and stale-response logic when an application never passes `onServerSearch`.
 
 A couple of correctness details worth knowing if you're relying on this closely:
 
 - **Below `serverSearchMinLength`, results are cleared, not just skipped.** If a longer query already merged server results in and you then delete characters below the threshold, those results are dropped immediately rather than lingering until the next qualifying query overwrites them.
-- **Matches/highlights are re-run when `items` changes shape.** When server results (or any other change to `items`, e.g. a custom `mergeServerResults`) alter the list while a query is active, `search.matches` is recomputed automatically — a matching server-fetched item will show up highlighted and be reachable via `nextMatch`/`prevMatch` without waiting for the next keystroke.
-- **IndexedDB eviction runs once per cache config, not once per keystroke.** `cacheTtlMs`-based cleanup is tied to `cacheStoreName`/`cacheTtlMs`, not to `items` — so a burst of server-search merges while typing doesn't trigger a full IndexedDB sweep on every character.
+- **Matches and highlights update when `items` changes.** If server results or a custom merge function changes the list during an active search, matches are calculated again. New matching rows are highlighted and immediately available through `nextMatch` and `prevMatch`.
+- **IndexedDB eviction runs once per cache config, not once per keystroke.** Cleanup depends on `cacheStoreName` and `cacheTtlMs`, not on `items`. A burst of server results therefore does not trigger a full IndexedDB scan after every character.
 - **The height-init pass cancels itself if superseded.** If `items` changes again (e.g. a fast second server response) before the server-hints → IndexedDB → Pretext cascade for the previous change finishes, the stale run bails out instead of applying outdated heights or sending a redundant batch to the Pretext worker.
 
 ### How this compares to react-window / react-virtuoso on height estimation
 
-`react-window`'s `VariableSizeList` takes a single flat `estimatedItemSize` and corrects it just-in-time via `resetAfterIndex` once an item renders — there's no notion of a *smarter* initial guess (see [bvaughn/react-window#6](https://github.com/bvaughn/react-window/issues/6) and [#190](https://github.com/bvaughn/react-window/issues/190), where users have been asking for exactly this since 2019). `react-virtuoso` handles unknown heights well at runtime but doesn't ship an off-thread text-measurement layer either. This library's 4-layer cascade — server hints, IndexedDB, Pretext, EMA — produces a materially better *first paint* estimate than either, at the cost of the added complexity documented above.
+`react-window`'s `VariableSizeList` starts with one `estimatedItemSize` and corrects it through `resetAfterIndex` after a row renders. It has no richer initial estimate. See [bvaughn/react-window#6](https://github.com/bvaughn/react-window/issues/6) and [#190](https://github.com/bvaughn/react-window/issues/190). `react-virtuoso` handles unknown heights well at runtime, but it does not include off-thread text measurement. This library starts with four sources: server hints, IndexedDB, Pretext, and EMA. That produces a better first estimate, with the extra complexity described above.
 
 ---
 
 ## Known limitations
 
-- **Mixed content items** (images, tables, custom elements): Pretext measures plain text only, so the initial estimate may be off. TanStack corrects it on first render — add `ref={observeItem}` and `data-index` so the item self-corrects.
+- **Mixed content items** (images, tables, custom elements): Pretext measures plain text only, so the initial estimate may be wrong. TanStack corrects it after the first render. Add `ref={observeItem}` and `data-index` so that measurement can happen.
 - **CSS margins on item children**: measured height excludes margins. Use padding instead of margin, or `overflow: hidden` on the item container.
 - **`system-ui` font**: canvas measurement and DOM diverge on macOS with `system-ui`. Use a named font (`Inter`, `Arial`, …) for accurate pre-render estimation.
 - **SSR**: `getComputedStyle`, `ResizeObserver`, and `IndexedDB` are browser-only. The hook falls back to `defaultItemHeight` during SSR and hydrates on the client.
@@ -448,13 +474,13 @@ A couple of correctness details worth knowing if you're relying on this closely:
 ```bash
 npm install
 npm run dev       # demo at http://localhost:5173
-npm test          # vitest — 213 tests
+npm test          # vitest: 213 tests
 npm run lint
 npm run lint:fix  # auto-fix what ESLint can
 npm run typecheck
 ```
 
-For architecture details and contribution guidelines, see [CONTRIBUTING.md](./CONTRIBUTING.md) — it documents the measurement model, the 4-layer height cascade, and the rules to follow when changing the measurement or search logic.
+For architecture details and contribution guidelines, see [CONTRIBUTING.md](./CONTRIBUTING.md). It explains the measurement model, the four height sources, and the rules for changing search or measurement logic.
 
 ---
 

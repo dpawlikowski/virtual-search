@@ -6,7 +6,15 @@ export { HighlightedText } from './components/HighlightedText'
 export { SearchBar } from './components/SearchBar'
 export type { SearchBarLabels } from './components/SearchBar'
 export { MatchMinimap } from './components/MatchMinimap'
-export { createSearchIndex, searchItems, resolveRanges, escapeRegex } from './search/miniSearchAdapter'
+export {
+  createSearchIndex,
+  searchItems,
+  resolveRanges,
+  escapeRegex,
+  mergeSearchOptions,
+  isHighlightCaseSensitive,
+  isHighlightWholeWord,
+} from './search/miniSearchAdapter'
 export { buildCacheKey, evictStaleEntries, DEFAULT_TTL_MS } from './storage/heightCache'
 export { EMA, EMA_DEFAULT_ALPHA, EMA_WARMUP_SAMPLES, EMA_READY_THRESHOLD, EMA_DEFAULT_FALLBACK } from './utils'
 export * from './types'

@@ -83,7 +83,7 @@ describe('resolveRanges — whole-word (fuzzy/prefix) highlighting', () => {
 
 describe('isHighlightWholeWord — mode policy', () => {
   const cases: Array<[string, SearchOptions, boolean]> = [
-    ['fuzzy/prefix (default) is always word-bounded', {}, true],
+    ['fuzzy/prefix (default) uses a word-start prefix instead', {}, false],
     ['fuzzy + wholeWord toggle stays word-bounded', { wholeWord: true }, true],
     ['exact match is substring by default', { exactMatch: true }, false],
     ['exact match + wholeWord bounds', { exactMatch: true, wholeWord: true }, true],
@@ -95,6 +95,39 @@ describe('isHighlightWholeWord — mode policy', () => {
   }
 })
 
+describe('prefix highlighting', () => {
+  it('can highlight only the typed text instead of whole matched words', () => {
+    const text = 'was we week wanted await now'
+    expect(resolveRanges(text, ['w'])).toEqual([
+      { start: 0, end: 1 },
+      { start: 4, end: 5 },
+      { start: 7, end: 8 },
+      { start: 12, end: 13 },
+      { start: 20, end: 21 },
+      { start: 27, end: 28 },
+    ])
+  })
+
+})
+
+describe('default substring matching', () => {
+  it('finds and highlights a query inside a word', () => {
+    const items: VirtualItem[] = [
+      { id: 'v', text: 'Critical vulnerability found' },
+    ]
+    const results = searchItems(
+      createSearchIndex(items, ['text']),
+      'ra',
+      buildMap(items),
+      items,
+      ['text']
+    )
+    expect(results).toHaveLength(1)
+    const ranges = resolveRanges(items[0].text, results[0].terms.get('text') ?? [])
+    expect(ranges.map(range => items[0].text.slice(range.start, range.end))).toEqual(['ra'])
+  })
+})
+
 describe('end-to-end: fuzzy search terms resolve without bleed', () => {
   const items: VirtualItem[] = [
     { id: '1', text: 'Design review feedback on the new onboarding flow' },
@@ -102,36 +135,29 @@ describe('end-to-end: fuzzy search terms resolve without bleed', () => {
     { id: '3', text: 'Nothing relevant here at all' },
   ]
 
-  it('searching "on" highlights the standalone word (and prefix "onboarding"), never a fragment', () => {
+  it('searching "on" highlights every literal occurrence, including inside words', () => {
     const idx = createSearchIndex(items, ['text'])
     const results = searchItems(idx, 'on', buildMap(items))
-    const wholeWord = isHighlightWholeWord({}) // fuzzy default → true
+    const wholeWord = isHighlightWholeWord({})
 
     for (const match of results) {
       const item = items[match.index]
       for (const [field, terms] of match.terms) {
         const val = (item as unknown as Record<string, string>)[field]
         const ranges = resolveRanges(val, terms, false, wholeWord)
-        // Every produced range must land on a real word boundary — never a
-        // fragment carved out of a bigger word like "conversation"/"onboarding".
-        for (const r of ranges) {
-          const before = val[r.start - 1] ?? ' '
-          const after = val[r.end] ?? ' '
-          const insideWord = /[\p{L}\p{N}]/u.test(before) || /[\p{L}\p{N}]/u.test(after)
-          expect(insideWord, `"${val.slice(r.start, r.end)}" in "${val}"`).toBe(false)
-        }
+        expect(ranges.every(r => val.slice(r.start, r.end).toLowerCase() === 'on')).toBe(true)
       }
     }
   })
 
-  it('item 2 highlights only the standalone "on", not the "on" in "conversation"/"hydration"', () => {
+  it('item 2 highlights every "on", including occurrences inside words', () => {
     const idx = createSearchIndex(items, ['text'])
     const results = searchItems(idx, 'on', buildMap(items))
     const match = results.find(r => r.itemId === '2')!
     const terms = match.terms.get('text')!
-    const ranges = resolveRanges(items[1].text, terms, false, true)
+    const ranges = resolveRanges(items[1].text, terms)
     const matched = ranges.map(r => items[1].text.slice(r.start, r.end))
-    expect(matched).toEqual(['on'])
+    expect(matched).toEqual(['on', 'on', 'on', 'on'])
   })
 })
 

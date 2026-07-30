@@ -30,6 +30,7 @@ interface EmailRowProps {
 const EmailRow = React.memo<EmailRowProps>(({ item, index, translateY, highlights, isActiveMatch, measureRef }) => {
   // Ranges are per-field character offsets; each field must use its own so
   // the highlight lands on the right characters (not the searchable `text`).
+  const fromRanges = highlights?.get('from')
   const subjectRanges = highlights?.get('subject')
   const previewRanges = highlights?.get('preview')
   const style = useMemo(() => ({ ...ITEM_STYLE, transform: `translateY(${translateY}px)` }), [translateY])
@@ -39,7 +40,7 @@ const EmailRow = React.memo<EmailRowProps>(({ item, index, translateY, highlight
   return (
     <div ref={measureRef} data-index={index} data-vs-item-id={item.id} style={style} className={cls} role="listitem">
       <div className="email-row__header">
-        <span className="email-row__from">{item.from}</span>
+        <span className="email-row__from"><HighlightedText text={item.from} ranges={fromRanges} /></span>
         <span className="email-row__date">{item.date}</span>
       </div>
       <div className="email-row__subject"><HighlightedText text={item.subject} ranges={subjectRanges} /></div>
@@ -57,7 +58,7 @@ interface EmailListProps {
 
 function EmailList({ visible, inputRef, onClose }: EmailListProps) {
   const { items, virtualizer, search, setQuery, setSearchOptions, nextMatch, prevMatch, goToMatch, getHighlights, getIsActiveMatch, observeItem, containerRef, getHeightSource } =
-    useSearchableList<EmailItem>({ items: EMAIL_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['subject', 'preview'], defaultItemHeight: EMAIL_ROW_HEIGHT })
+    useSearchableList<EmailItem>({ items: EMAIL_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['from', 'subject', 'preview'], defaultItemHeight: EMAIL_ROW_HEIGHT })
 
   const virtualItems = virtualizer.getVirtualItems()
 
@@ -103,14 +104,16 @@ interface NewsRowProps {
 
 const NewsRow = React.memo<NewsRowProps>(({ item, index, translateY, highlights, isActiveMatch, measureRef }) => {
   const headlineRanges = highlights?.get('headline')
+  const sourceRanges = highlights?.get('source')
+  const categoryRanges = highlights?.get('category')
   const bodyRanges = highlights?.get('body')
   const style = useMemo(() => ({ ...ITEM_STYLE, transform: `translateY(${translateY}px)` }), [translateY])
   const cls = isActiveMatch ? 'news-row email-row--active-match' : 'news-row'
   return (
     <div ref={measureRef} data-index={index} data-vs-item-id={item.id} style={style} className={cls} role="listitem">
       <div className="news-row__meta">
-        <span className="news-row__source">{item.source}</span>
-        <span className="news-row__category">{item.category}</span>
+        <span className="news-row__source"><HighlightedText text={item.source} ranges={sourceRanges} /></span>
+        <span className="news-row__category"><HighlightedText text={item.category} ranges={categoryRanges} /></span>
         <span className="news-row__date">{item.date}</span>
       </div>
       <div className="news-row__headline"><HighlightedText text={item.headline} ranges={headlineRanges} /></div>
@@ -128,7 +131,7 @@ interface NewsListProps {
 
 function NewsList({ visible, inputRef, onClose }: NewsListProps) {
   const { items, virtualizer, search, setQuery, setSearchOptions, nextMatch, prevMatch, goToMatch, getHighlights, getIsActiveMatch, observeItem, containerRef, getHeightSource } =
-    useSearchableList<NewsItem>({ items: NEWS_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['headline', 'body'], defaultItemHeight: NEWS_ROW_HEIGHT })
+    useSearchableList<NewsItem>({ items: NEWS_ITEMS, containerHeight: LIST_HEIGHT, searchFields: ['source', 'category', 'headline', 'body'], defaultItemHeight: NEWS_ROW_HEIGHT })
 
   const virtualItems = virtualizer.getVirtualItems()
 

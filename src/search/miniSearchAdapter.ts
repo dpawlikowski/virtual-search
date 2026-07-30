@@ -2,6 +2,21 @@ import MiniSearch from 'minisearch'
 import type { VirtualItem, SearchMatch, MatchRange, SearchOptions } from '../types'
 
 /**
+ * Merges a partial option update and keeps mutually-exclusive search modes
+ * consistent. Kept in core so custom search UIs get the same behaviour as
+ * SearchBar.
+ */
+export function mergeSearchOptions(
+  current: SearchOptions,
+  update: Partial<SearchOptions>
+): SearchOptions {
+  const next = { ...current, ...update }
+  if (update.regex === true && current.exactMatch) next.exactMatch = false
+  if (update.exactMatch === true && current.regex) next.regex = false
+  return next
+}
+
+/**
  * Whether `caseSensitive` should actually be honored when resolving
  * highlight ranges / snippets. Only `regex`/`exactMatch` modes extract terms
  * verbatim from the source text — fuzzy/prefix mode's terms come from
@@ -28,7 +43,7 @@ export function isHighlightCaseSensitive(options: SearchOptions): boolean {
 export function isHighlightWholeWord(options: SearchOptions): boolean {
   if (options.regex) return false
   if (options.exactMatch) return !!options.wholeWord
-  return true // fuzzy / prefix — terms are whole-word tokens
+  return !!options.wholeWord
 }
 
 export function createSearchIndex<T extends VirtualItem>(
@@ -73,15 +88,21 @@ export function searchItems<T extends VirtualItem>(
   // Fuzzy/prefix mode: wholeWord disables prefix matching so tokens must
   // match a full word instead of just its start.
   const results = index.search(trimmed, options?.wholeWord ? { prefix: false } : undefined)
-  return results
+  const queryTokens = trimmed.match(/[\p{L}\p{N}]+/gu) ?? [trimmed]
+  const fuzzyMatches = results
     .filter(r => itemIndexMap.has(r.id as string))
     .map(r => {
       const itemId = r.id as string
       const fieldToTerms = new Map<string, Set<string>>()
       for (const [term, fields] of Object.entries(r.match as Record<string, string[]>)) {
+        const foldedTerm = term.toLocaleLowerCase()
+        const prefix = options?.wholeWord
+          ? undefined
+          : queryTokens.find(token => foldedTerm.startsWith(token.toLocaleLowerCase()))
+        const highlightTerm = prefix ?? term
         for (const field of fields) {
           if (!fieldToTerms.has(field)) fieldToTerms.set(field, new Set())
-          fieldToTerms.get(field)!.add(term)
+          fieldToTerms.get(field)!.add(highlightTerm)
         }
       }
 
@@ -93,6 +114,42 @@ export function searchItems<T extends VirtualItem>(
       return { itemId, index: itemIndexMap.get(itemId)!, score: r.score, terms }
     })
     .sort((a, b) => b.score - a.score)
+
+  // Default search also behaves like browser find: a literal query can match
+  // inside a word (`ra` in `vulnerability`). Keep MiniSearch's fuzzy/prefix
+  // results, then supplement them with literal substring matches.
+  if (items && fields && !options?.wholeWord) {
+    const substringMatches = searchItemsByPredicate(
+      items,
+      fields,
+      itemIndexMap,
+      makeExactMatcher(trimmed, false, false)
+    )
+    return mergeSearchMatches(fuzzyMatches, substringMatches)
+  }
+
+  return fuzzyMatches
+}
+
+function mergeSearchMatches(primary: SearchMatch[], supplemental: SearchMatch[]): SearchMatch[] {
+  const byId = new Map(primary.map(match => [match.itemId, match]))
+  for (const extra of supplemental) {
+    const existing = byId.get(extra.itemId)
+    if (!existing) {
+      byId.set(extra.itemId, extra)
+      continue
+    }
+    const terms = new Map(existing.terms)
+    for (const [field, extraTerms] of extra.terms) {
+      terms.set(field, Array.from(new Set([...(terms.get(field) ?? []), ...extraTerms])))
+    }
+    byId.set(extra.itemId, {
+      ...existing,
+      score: existing.score + extra.score,
+      terms,
+    })
+  }
+  return Array.from(byId.values()).sort((a, b) => b.score - a.score || a.index - b.index)
 }
 
 /** Returns the literal matched substrings found in `text`, or null if none. */

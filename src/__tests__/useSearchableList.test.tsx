@@ -100,6 +100,36 @@ describe('useSearchableList — search options', () => {
     expect(result.current.search.options).toEqual({ regex: true, caseSensitive: true })
   })
 
+  it('does not lose rapid consecutive option updates and normalizes exclusive modes', () => {
+    const { result } = renderHook(() => useSearchableList({ items }))
+    act(() => {
+      result.current.setSearchOptions({ exactMatch: true })
+      result.current.setSearchOptions({ wholeWord: true })
+      result.current.setSearchOptions({ caseSensitive: true })
+    })
+    expect(result.current.search.options).toEqual({
+      exactMatch: true,
+      wholeWord: true,
+      caseSensitive: true,
+    })
+
+    act(() => result.current.setSearchOptions({ regex: true }))
+    expect(result.current.search.options).toEqual({
+      exactMatch: false,
+      regex: true,
+      wholeWord: true,
+      caseSensitive: true,
+    })
+
+    act(() => result.current.setSearchOptions({ exactMatch: true }))
+    expect(result.current.search.options).toEqual({
+      exactMatch: true,
+      regex: false,
+      wholeWord: true,
+      caseSensitive: true,
+    })
+  })
+
   it('changing options re-runs the current query', async () => {
     const { result } = renderHook(() => useSearchableList({ items }))
     act(() => result.current.setQuery('quik')) // fuzzy-matches "quick" by default
@@ -241,10 +271,7 @@ describe('useSearchableList — getHighlights / getIsActiveMatch', () => {
     expect(highlights?.get('text')?.length).toBeGreaterThan(0)
   })
 
-  it('word-bounds fuzzy highlights — never smears a token across a larger word', async () => {
-    // Regression: searching "on" used to highlight the "on" inside
-    // "conversation" (raw substring). getHighlights must only mark the
-    // standalone word.
+  it('highlights every literal occurrence of the default query', async () => {
     const bleedItems: VirtualItem[] = [
       { id: 'a', text: 'I followed up on our conversation about hydration' },
     ]
@@ -253,7 +280,31 @@ describe('useSearchableList — getHighlights / getIsActiveMatch', () => {
     await waitFor(() => expect(result.current.search.matches.length).toBeGreaterThan(0))
     const ranges = result.current.getHighlights(0)?.get('text') ?? []
     const matched = ranges.map(r => bleedItems[0].text.slice(r.start, r.end))
-    expect(matched).toEqual(['on'])
+    expect(matched).toEqual(['on', 'on', 'on', 'on'])
+  })
+
+  it('highlights only a one-letter query, not whole prefix-matched words', async () => {
+    const prefixItems: VirtualItem[] = [
+      { id: 'w', text: 'was we week wanted await now' },
+    ]
+    const { result } = renderHook(() => useSearchableList({ items: prefixItems }))
+    act(() => result.current.setQuery('w'))
+    await waitFor(() => expect(result.current.search.matches).toHaveLength(1))
+    const ranges = result.current.getHighlights(0)?.get('text') ?? []
+    expect(ranges.map(range => prefixItems[0].text.slice(range.start, range.end))).toEqual([
+      'w', 'w', 'w', 'w', 'w', 'w',
+    ])
+  })
+
+  it('finds and highlights a default query inside a word', async () => {
+    const substringItems: VirtualItem[] = [
+      { id: 'v', text: 'Critical vulnerability found' },
+    ]
+    const { result } = renderHook(() => useSearchableList({ items: substringItems }))
+    act(() => result.current.setQuery('ra'))
+    await waitFor(() => expect(result.current.search.matches).toHaveLength(1))
+    const ranges = result.current.getHighlights(0)?.get('text') ?? []
+    expect(ranges.map(range => substringItems[0].text.slice(range.start, range.end))).toEqual(['ra'])
   })
 
   it('returns undefined for an item with no match', async () => {

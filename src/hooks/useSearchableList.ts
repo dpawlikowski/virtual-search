@@ -16,7 +16,7 @@ import type {
   MatchRange,
 } from '../types'
 import { EMA_DEFAULT_FALLBACK } from '../utils'
-import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive, isHighlightWholeWord } from '../search/miniSearchAdapter'
+import { createSearchIndex, searchItems, resolveRanges, isHighlightCaseSensitive, isHighlightWholeWord, mergeSearchOptions } from '../search/miniSearchAdapter'
 import { useServerSearch } from './useServerSearch'
 import { useHeightCache, HeightStore } from './useHeightCache'
 
@@ -47,7 +47,7 @@ type SearchAction =
   | { type: 'NEXT_MATCH' }
   | { type: 'PREV_MATCH' }
   | { type: 'SET_SEARCHING'; value: boolean }
-  | { type: 'SET_OPTIONS'; options: SearchOptions }
+  | { type: 'SET_OPTIONS'; options: Partial<SearchOptions> }
   | { type: 'SET_ACTIVE'; index: number }
 
 export function searchReducer(s: SearchState, a: SearchAction): SearchState {
@@ -57,7 +57,7 @@ export function searchReducer(s: SearchState, a: SearchAction): SearchState {
     case 'NEXT_MATCH': { const n = s.matches.length; return { ...s, activeMatchIndex: n === 0 ? 0 : (s.activeMatchIndex + 1) % n } }
     case 'PREV_MATCH': { const n = s.matches.length; return { ...s, activeMatchIndex: n === 0 ? 0 : (s.activeMatchIndex - 1 + n) % n } }
     case 'SET_SEARCHING': return { ...s, isSearching: a.value }
-    case 'SET_OPTIONS':   return { ...s, options: a.options }
+    case 'SET_OPTIONS':   return { ...s, options: mergeSearchOptions(s.options, a.options) }
     case 'SET_ACTIVE':    return { ...s, activeMatchIndex: a.index }
     default: return s
   }
@@ -107,6 +107,8 @@ export function useSearchableList<T extends VirtualItem>(
   const [searchState, searchDispatch] = useReducer(searchReducer, {
     query: '', matches: [], activeMatchIndex: 0, isSearching: false, options: {},
   })
+  const searchOptionsRef = useRef<SearchOptions>({})
+  searchOptionsRef.current = searchState.options
 
   // ── Items merge ───────────────────────────────────────────────────────────
   const items = useMemo<T[]>(
@@ -233,16 +235,17 @@ export function useSearchableList<T extends VirtualItem>(
 
   const setQuery = useCallback((query: string) => {
     searchDispatch({ type: 'SET_QUERY', query })
-    runSearch(query, searchState.options)
+    runSearch(query, searchOptionsRef.current)
     if (!query.trim()) clearServerSearch()
     else runServerSearch(query)
-  }, [runSearch, searchState.options, runServerSearch, clearServerSearch])
+  }, [runSearch, runServerSearch, clearServerSearch])
 
   const setSearchOptions = useCallback((options: Partial<SearchOptions>) => {
-    const next = { ...searchState.options, ...options }
-    searchDispatch({ type: 'SET_OPTIONS', options: next })
+    const next = mergeSearchOptions(searchOptionsRef.current, options)
+    searchOptionsRef.current = next
+    searchDispatch({ type: 'SET_OPTIONS', options })
     runSearch(searchState.query, next)
-  }, [searchState.options, searchState.query, runSearch])
+  }, [searchState.query, runSearch])
 
   // ── Re-run the active query when `items` changes shape ────────────────────
   // Covers server results merging in (or a custom mergeServerResults
