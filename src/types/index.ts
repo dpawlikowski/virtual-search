@@ -43,10 +43,10 @@ export interface SearchOptions {
   /** Case-sensitive matching. Only applies to `regex`/`exactMatch` modes — fuzzy search is always case-insensitive. */
   caseSensitive?: boolean
   /**
-   * Match whole words only (word-boundary constrained). In fuzzy mode this
-   * disables prefix matching; in `exactMatch` mode it requires `\b` word
-   * boundaries around the literal match. Ignored if `regex` is set — write
-   * `\b` in the pattern yourself for full control.
+   * Match whole words only. In default mode this requires identical full
+   * tokens by disabling fuzzy and prefix matching. In `exactMatch` mode it
+   * applies Unicode-aware letter/number boundaries around the literal match.
+   * Ignored if `regex` is set; define boundaries in the pattern instead.
    */
   wholeWord?: boolean
 }

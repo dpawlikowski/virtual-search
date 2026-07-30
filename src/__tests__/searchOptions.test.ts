@@ -133,6 +133,18 @@ describe('searchItems — whole word mode', () => {
     expect(wholeWordOnly).toHaveLength(0)
   })
 
+  it('wholeWord rejects a longer token even when it is only one edit away', () => {
+    const typoItems: VirtualItem[] = [
+      { id: 'white', text: 'Carol White' },
+      { id: 'whit', text: 'Whit Merrifield' },
+    ]
+    const typoMap = new Map(typoItems.map((item, index) => [item.id, index]))
+    const idx = createSearchIndex(typoItems, ['text'])
+
+    expect(searchItems(idx, 'whit', typoMap, typoItems, ['text'], { wholeWord: true })
+      .map(result => result.itemId)).toEqual(['whit'])
+  })
+
   it('fuzzy mode: wholeWord still matches a query equal to a full token', () => {
     const idx = createSearchIndex(wwItems, ['text'])
     const results = searchItems(idx, 'cat', map, wwItems, ['text'], { wholeWord: true })

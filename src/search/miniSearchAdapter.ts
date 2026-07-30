@@ -85,9 +85,12 @@ export function searchItems<T extends VirtualItem>(
     )
   }
 
-  // Fuzzy/prefix mode: wholeWord disables prefix matching so tokens must
-  // match a full word instead of just its start.
-  const results = index.search(trimmed, options?.wholeWord ? { prefix: false } : undefined)
+  // Whole-word mode requires an identical full token. Disable both prefix and
+  // fuzzy matching so e.g. "whit" cannot match the token "white".
+  const results = index.search(
+    trimmed,
+    options?.wholeWord ? { prefix: false, fuzzy: false } : undefined
+  )
   const queryTokens = trimmed.match(/[\p{L}\p{N}]+/gu) ?? [trimmed]
   const fuzzyMatches = results
     .filter(r => itemIndexMap.has(r.id as string))

@@ -126,9 +126,23 @@ Domyślne wyszukiwanie łączy wyniki MiniSearch z prostym wyszukiwaniem fragmen
 
 `searchFields` musi zawierać każde widoczne pole, które ma być przeszukiwane i podświetlane osobno. Dla emaila będą to na przykład `from`, `subject` i `preview`. `getHighlights` zwraca mapę pod tymi samymi kluczami. Nie zakładaj, że obecność wartości w sklejanym polu `text` wystarczy do poprawnego podświetlenia osobnego elementu interfejsu.
 
-`exactMatch` i `regex` skanują wskazane pola bezpośrednio. Nie korzystają z fuzzy search. Te tryby wzajemnie się wykluczają, a `mergeSearchOptions` pilnuje tego również wtedy, gdy aplikacja używa własnych kontrolek zamiast `SearchBar`.
+Znaczenie trybów:
 
-`wholeWord` w domyślnym trybie wyłącza dopasowanie prefiksu. Razem z `exactMatch` wymaga granic po obu stronach słowa lub całej frazy. Granice są oparte na literach i cyfrach Unicode, a nie na `\b`, dlatego poprawnie działają między innymi dla `café`. W trybie regex opcja jest ignorowana. Granice trzeba zapisać w samym wyrażeniu.
+| Opcje | Reguła dopasowania | `whit` → `White` | `whit` → `Whittaker` |
+| --- | --- | ---: | ---: |
+| brak (domyślny) | fragment + prefiks + fuzzy | tak (literalny prefiks, a także mały dystans edycyjny) | tak |
+| `wholeWord` | identyczne pełne tokeny | nie | nie |
+| `exactMatch` | identyczny ciągły fragment, bez automatycznych granic słowa | tak | tak |
+| `exactMatch + wholeWord` | identyczne pełne słowo lub ciągła fraza | nie | nie |
+| `regex` | wyrażenie regularne JavaScript | tak dla `whit` bez granicy końcowej | tak |
+
+Nazwa `exactMatch` oznacza w tym API dopasowanie literalnego fragmentu, a nie pełnego słowa. `exactMatch` i `regex` skanują wskazane pola bezpośrednio i nie korzystają z fuzzy search. Te tryby wzajemnie się wykluczają, a `mergeSearchOptions` pilnuje tego również wtedy, gdy aplikacja używa własnych kontrolek zamiast `SearchBar`.
+
+Domyślny tryb ma `fuzzy: 0.15`, więc MiniSearch wylicza dozwolony dystans edycyjny z długości termu. Dlatego prawdziwa literówka `quik` może znaleźć `quick`. Przypadek `whit` → `White` jest podwójnie istotny: wygląda jak korekta literówki, ale `whit` jest też literalnym prefiksem `White`, więc wynik może pochodzić z wyszukiwania fragmentu lub prefiksu bez udziału fuzzy. Jeśli użytkownik włączy `wholeWord`, obietnica zmienia się na identyczny pełny token: wyłączamy wtedy zarówno `prefix`, jak i `fuzzy`. Samodzielne słowo `Whit` nadal pasuje, ale `White` i `Whittaker` już nie.
+
+`wholeWord` bez `exactMatch` przechodzi przez indeks i dla zapytania wielowyrazowego wymaga wszystkich tokenów (`combineWith: 'AND'`), lecz nie wymaga ich sąsiedztwa ani kolejności. `exactMatch + wholeWord` skanuje tekst bezpośrednio i wymaga jednej ciągłej frazy z granicami przed pierwszym i po ostatnim znaku.
+
+Granice literalnego whole-word są oparte na literach i cyfrach Unicode, a nie na `\b`, dlatego `café` pasuje do samodzielnego `café`, ale nie do `cafés`. Podkreślenia i interpunkcja są separatorami. W trybie regex opcja `wholeWord` jest ignorowana; granice trzeba zapisać w samym wyrażeniu i pamiętać, że JavaScriptowe `\b` nie ma identycznej semantyki Unicode.
 
 `caseSensitive` działa tylko dla regex i exact match. Domyślny tryb pozostaje niewrażliwy na wielkość liter, ponieważ termy zwracane przez MiniSearch są normalizowane.
 

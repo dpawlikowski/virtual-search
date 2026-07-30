@@ -20,6 +20,7 @@ All notable changes to `@virtual-search/core` are documented here.
 
 ### Fixed
 
+- `wholeWord` in the default search mode still allowed fuzzy and prefix matches, so a query such as `whit` matched and highlighted `White`. It now requires an identical full token by disabling both mechanisms. The documentation and search-mode test matrix now distinguish literal prefixes (`whit` → `White`) from typo-only matches (`quik` → `quick`).
 - Prefix matches used to highlight the complete indexed token. Searching for `w` could paint all of `week` or `wanted`. Highlighting now follows the literal query, so only `w` is painted. Fuzzy matches with no literal occurrence still use the term reported by MiniSearch.
 - `wholeWord` now uses Unicode-aware boundaries based on letters and numbers. Accented words such as `café` work correctly.
 - `search.matches`/highlights were never recomputed when `items` changed shape after the initial search ran (e.g. `onServerSearch` results merging in, or a custom `mergeServerResults` reordering items): a matching server-fetched item would render in the list but not be highlighted or reachable via `nextMatch`/`prevMatch` until the next keystroke re-ran the query

@@ -232,9 +232,9 @@ Returns:
 ```ts
 interface SearchOptions {
   regex?: boolean          // treat the query as a regular expression
-  exactMatch?: boolean     // use literal substring matching without fuzzy matching
+  exactMatch?: boolean     // literal substring; add wholeWord for word boundaries
   caseSensitive?: boolean  // applies to regex and exactMatch
-  wholeWord?: boolean      // require word boundaries; ignored in regex mode
+  wholeWord?: boolean      // exact full tokens; ignored in regex mode
 }
 ```
 
@@ -257,21 +257,37 @@ useSearchableList({
 
 The keys returned by `getHighlights` match these field names. Use the matching key when rendering each value. A field that is present only inside a concatenated `text` value can be found, but it cannot be highlighted accurately in its separate visual element.
 
-The default mode is case-insensitive. It combines three useful behaviors:
+#### How the modes differ
 
-- Literal substring matching finds the text anywhere in a field. Searching for `ra` finds `rapid`, `paragraph`, and `vulnerability`.
-- Prefix matching finds words that start with the query.
-- Fuzzy matching still finds close spellings such as `quik` for `quick`.
+| Options | Meaning | Does `whit` find `White`? | Does `whit` find `Whittaker`? |
+| --- | --- | ---: | ---: |
+| none (default) | substring + prefix + typo-tolerant token search | yes, as a literal prefix (and also within fuzzy distance) | yes, as a literal prefix |
+| `wholeWord` | identical complete tokens only | no | no |
+| `exactMatch` | identical contiguous substring; word boundaries are not implied | yes | yes |
+| `exactMatch + wholeWord` | identical contiguous word or phrase with boundaries on both ends | no | no |
+| `regex` | JavaScript regular expression | yes for `/whit/i` | yes for `/whit/i` |
 
-Highlighting follows the query. Searching for `w` highlights the letter `w`, not the whole word `week`. A fuzzy match with no literal occurrence can highlight the word MiniSearch matched.
+A **token** is a run of letters or numbers produced by the full-text index. Punctuation and whitespace separate tokens. Search is case-insensitive unless the active direct-scanning mode supports `caseSensitive`.
 
-`exactMatch` turns off fuzzy and prefix matching. It still finds a literal fragment inside a longer word unless `wholeWord` is also enabled.
+The default mode deliberately combines three result sources:
 
-`wholeWord` changes the default mode from prefix matching to full-token matching. Fuzzy matching remains available. With `exactMatch`, it requires real boundaries around the literal word or phrase. The boundary check is Unicode-aware, so words such as `café` work correctly.
+- Literal substring matching: `ra` finds `rapid`, `paragraph`, and `vulnerability`.
+- Prefix matching: `whit` finds a token such as `Whittaker`.
+- Fuzzy matching: a close misspelling such as `quik` can find `quick`. MiniSearch calculates the permitted edit distance from `fuzzy: 0.15`; this is typo tolerance, not a word-boundary guarantee.
 
-`regex` treats the query as a JavaScript regular expression. Invalid expressions return no results instead of throwing. Empty matches are ignored. `wholeWord` is disabled in this mode because the expression should define its own boundaries.
+`whit` → `White` deserves special attention: it may look like typo correction, but `whit` is also a literal prefix of `White`. The default mode can therefore obtain this result from substring/prefix matching even without fuzzy search. Enabling **Whole word** must disable both prefix and fuzzy matching: either one would violate the promise of an identical complete token. With Whole word enabled, `whit` does not find `White`; it still finds a standalone token spelled `Whit`.
 
-`caseSensitive` applies only to regex and exact match. The `Aa` control is disabled in the default mode. The `|ab|` control is disabled in regex mode.
+`exactMatch` is best read as **literal substring**. It disables the index's fuzzy and prefix mechanisms but does not imply word boundaries: its direct substring scan still matches `whit` inside both `White` and `Whittaker`. Add `wholeWord` to require boundaries. For a multi-word query, `exactMatch + wholeWord` requires one contiguous phrase with a boundary before its first character and after its last character.
+
+`wholeWord` without `exactMatch` uses the full-text index. Every query token must be present as an identical full token because the index is configured with `combineWith: 'AND'`; the words do not have to form one adjacent phrase or appear in query order. Use `exactMatch + wholeWord` when adjacency and order matter.
+
+Word boundaries in literal whole-word mode are Unicode-aware and treat letters and numbers as word characters. Therefore `café` matches the standalone word `café` but not the prefix in `cafés`. Underscores and punctuation are separators under this boundary definition.
+
+`regex` treats the query as a JavaScript regular expression. Invalid expressions return no results instead of throwing, and zero-length matches are ignored. `wholeWord` is disabled in this mode because the expression must define its own boundaries. Note that JavaScript `\b` is not equivalent to this library's Unicode-aware letter/number boundary.
+
+`caseSensitive` applies only to regex and exact match. The indexed default and Whole word modes are case-insensitive because MiniSearch lowercases terms by default. Accordingly, the `Aa` control is disabled in those modes, while `|ab|` is disabled in regex mode.
+
+Highlighting follows the source of the match. A literal or prefix query highlights the typed text (`w` in `week`), while a fuzzy match with no literal occurrence highlights the actual indexed token that matched (`quick` for `quik`).
 
 Regex and exact match are mutually exclusive. The core library normalizes these options, so custom search controls behave the same way as `SearchBar`.
 
